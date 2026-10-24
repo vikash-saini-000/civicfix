@@ -182,9 +182,10 @@ when the server contract does not provide them.
 
 The authenticated `/notifications` route is present in the shell, but the current repository has no notification endpoint,
 unread-count contract, pagination metadata, or read/mark-all mutation. The page therefore shows an explicit unavailable
-contract state and never fabricates notifications or unread counts. Existing complaint `history` events remain the supported
-activity-history source and are shown on authorized complaint detail pages; there is no separate activity-feed or audit-log
-endpoint exposed to the frontend.
+contract state and never fabricates notifications or unread counts. For citizens, the route now provides a clearly labelled
+recent-activity view derived from the authorized complaint `history` already returned by the complaint API; it is not a
+persistent notification feed and has no read/unread state. Staff and administrator views remain unavailable until their own
+authorized notification contract exists. There is no separate activity-feed or audit-log endpoint exposed to the frontend.
 
 ## Phase 9 search, filtering, and sorting
 
@@ -196,10 +197,10 @@ or claimed.
 ## Phase 16 synchronization fallback
 
 The repository has no WebSocket, SSE, notification-list, unread-count, read-state, or activity-feed contract. The frontend
-does not invent those endpoints or fabricate notification data. Supported complaint pages now refresh their authorized list
-or detail data when the browser window regains focus or the tab becomes visible. Complaint details also perform a conservative
-30-second refresh while visible; the timer is stopped on unmount and refresh requests are not allowed to overlap. This is a
-refresh-on-focus/polling fallback, not instantaneous push delivery.
+does not invent those endpoints or fabricate notification data. Supported complaint pages and the citizen recent-activity
+view now refresh their authorized data when the browser window regains focus or the tab becomes visible. Complaint details
+also perform a conservative 30-second refresh while visible; the timer is stopped on unmount and refresh requests are not
+allowed to overlap. This is a refresh-on-focus/polling fallback, not instantaneous push delivery.
 
 ## Deployment handoff
 

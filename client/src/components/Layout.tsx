@@ -1,5 +1,5 @@
 import { Suspense, useEffect, useRef, useState, type ReactNode } from 'react';
-import { NavLink, Outlet, useLocation, useNavigate } from 'react-router';
+import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router';
 import { API_MODE, AUTH_MODE, USING_MOCK_API } from '../api';
 import { ROLE_LABELS, navigationForRole, type NavigationItem } from '../auth/navigation';
 import { useAuth } from '../auth/AuthContext';
@@ -166,8 +166,40 @@ export function Layout() {
           <Outlet />
         </Suspense>
       </main>
-      <footer className="bg-inverse text-[0.75rem] text-[#c6c6c6]">
-        <div className="mx-auto max-w-[66rem] px-4 py-6">CivicFix · Team BitBros, NITK Surathkal · ChronoForge 2026</div>
+      <footer className="bg-inverse text-[0.875rem] text-[#c6c6c6]">
+        <div className="mx-auto grid max-w-[66rem] gap-10 px-4 py-10 md:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)_minmax(0,1fr)] md:py-12">
+          <div className="max-w-[24rem]">
+            <Link to="/" className="inline-flex items-center gap-2 text-[1.125rem] text-white no-underline">
+              <svg width="20" height="20" viewBox="0 0 32 32" aria-hidden="true">
+                <rect width="32" height="32" fill="#0f62fe" />
+                <path d="M9 16.5l4.5 4.5L23 11.5" fill="none" stroke="#fff" strokeWidth="3" />
+              </svg>
+              <span>Civic<span className="font-semibold">Fix</span></span>
+            </Link>
+            <p className="mt-4 max-w-[22rem] leading-6">
+              A simpler way for residents to report public problems and follow the information available about them.
+            </p>
+          </div>
+          <div>
+            <h2 className="text-[0.75rem] font-semibold uppercase tracking-[0.1em] text-white">For citizens</h2>
+            <nav aria-label="Citizen footer navigation" className="mt-4 flex flex-col items-start gap-3">
+              <Link to="/citizen/complaints/new" className="text-[#c6c6c6] underline-offset-4 hover:text-white hover:underline">Report a problem</Link>
+              <Link to="/#track" className="text-[#c6c6c6] underline-offset-4 hover:text-white hover:underline">Track a complaint</Link>
+              <Link to="/#how-it-works" className="text-[#c6c6c6] underline-offset-4 hover:text-white hover:underline">How it works</Link>
+              <Link to="/login" className="text-[#c6c6c6] underline-offset-4 hover:text-white hover:underline">Log in</Link>
+            </nav>
+          </div>
+          <div>
+            <h2 className="text-[0.75rem] font-semibold uppercase tracking-[0.1em] text-white">Good to know</h2>
+            <p className="mt-4 leading-6">CivicFix is for non-emergency public problems. For immediate danger, contact your local emergency service.</p>
+            <p className="mt-4 text-[0.75rem] text-[#8d8d8d]">Team BitBros · NITK Surathkal · ChronoForge 2026</p>
+          </div>
+        </div>
+        <div className="border-t border-[#393939]">
+          <div className="mx-auto max-w-[66rem] px-4 py-4 text-[0.75rem] text-[#8d8d8d]">
+            Information shown in CivicFix depends on the connected city workflow and the access available to your account.
+          </div>
+        </div>
       </footer>
     </div>
   );

@@ -19,6 +19,22 @@ function makeAuthApi(): AuthApi {
 }
 
 describe('Layout accessibility behavior', () => {
+  it('provides a citizen-focused footer with useful links and emergency guidance', async () => {
+    render(
+      <MemoryRouter>
+        <AuthProvider authApi={makeAuthApi()}>
+          <Layout />
+        </AuthProvider>
+      </MemoryRouter>,
+    );
+
+    const footer = await waitFor(() => screen.getByRole('contentinfo'));
+    expect(within(footer).getByRole('link', { name: /civicfix/i })).toHaveAttribute('href', '/');
+    expect(within(footer).getByRole('link', { name: 'Report a problem' })).toHaveAttribute('href', '/citizen/complaints/new');
+    expect(within(footer).getByRole('link', { name: 'Track a complaint' })).toHaveAttribute('href', '/#track');
+    expect(within(footer).getByText(/for immediate danger/i)).toBeInTheDocument();
+  });
+
   it('moves focus into the mobile menu and restores it on Escape', async () => {
     render(
       <MemoryRouter>

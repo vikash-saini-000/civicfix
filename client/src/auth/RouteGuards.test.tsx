@@ -142,7 +142,6 @@ describe('protected route behavior', () => {
     renderAt('/notifications', makeAuthApi(makeUser('citizen')));
 
     await waitFor(() => expect(screen.getByRole('heading', { name: 'Notifications' })).toBeInTheDocument());
-    expect(screen.getByText('Notifications is not available yet')).toBeInTheDocument();
     expect(screen.queryByText(/unread count:|unread notifications/i)).not.toBeInTheDocument();
   });
 
