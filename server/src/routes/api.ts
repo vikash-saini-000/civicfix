@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import type { Types } from 'mongoose';
 import type { EventBus } from '../events/bus.js';
 import type { RateLimitOptions } from '../middleware/rateLimit.js';
 import type { AnalysisService } from '../services/analysis/index.js';
@@ -20,6 +21,8 @@ import { departmentsRouter } from './departments.js';
 import { evidenceUploadRouter, resolutionRouter } from './resolution.js';
 import { auditLogsRouter, notificationsRouter } from './notifications.js';
 import { dashboardsRouter } from './dashboards.js';
+import { analyticsRouter, geoRouter } from './analytics.js';
+import { createAnalyticsService } from '../services/analytics.js';
 import { usersRouter } from './users.js';
 import { assignmentsRouter, workOrdersRouter } from './workOrders.js';
 
@@ -53,16 +56,21 @@ export function buildApi(deps: ApiDeps): { router: Router; uploads: Router } {
   const { authService, analysisService, events, logger } = deps;
   const storage = deps.storage ?? disabledStorage;
 
+  // workOrderService is created below; the hook only runs later, at request time.
+  let reevaluate: (id: Types.ObjectId) => Promise<unknown> = async () => undefined;
   const complaintService = createComplaintService({
     onCreated: (id) => analysisService.queueForNewComplaint(id),
+    onFollowUpAnswered: (id) => analysisService.queueAfterFollowUp(id),
+    onUnlinked: (id) => reevaluate(id),
     onHookError: (err) => deps.onHookError?.(err),
     events,
   });
   const workOrderService = createWorkOrderService({ logger, events, complaints: complaintService, policy: deps.assignmentPolicy });
+  reevaluate = (id) => workOrderService.evaluateAutoAssignment(id);
   const evidenceService = createEvidenceService({
     storage,
     complaints: complaintService,
-    queueAnalysis: (complaintId, evidenceId, by) => analysisService.queueForEvidence(complaintId, evidenceId, by),
+    queueAnalysis: (complaintId, evidenceId, by, purpose, mediaType) => analysisService.queueForEvidence(complaintId, evidenceId, by, purpose, mediaType),
     onQueueError: (err) => logger.error({ err: safeError(err) }, 'evidence analysis could not be queued'),
   });
   const resolutionService = createResolutionService({ events, complaints: complaintService, workOrders: workOrderService, policy: deps.verificationPolicy });
@@ -88,6 +96,8 @@ export function buildApi(deps: ApiDeps): { router: Router; uploads: Router } {
   router.use('/notifications', notificationsRouter({ authService, notificationService }));
   router.use('/audit-logs', auditLogsRouter({ authService }));
   router.use('/dashboard', dashboardsRouter({ authService, dashboardService: createDashboardService() }));
+  router.use('/analytics', analyticsRouter({ authService, analyticsService: createAnalyticsService() }));
+  router.use('/geo', geoRouter({ authService }));
 
   const uploads = evidenceUploadRouter({ authService, evidenceService, uploadLimit: deps.uploadLimit });
   return { router, uploads };

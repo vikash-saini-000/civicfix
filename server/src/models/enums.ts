@@ -79,6 +79,12 @@ export const REVIEW_REASONS = [
   'AI_UNAVAILABLE',
   'CATEGORY_CONFLICT',
   'ASSIGNEE_DECLINED',
+  // Possible danger to people (live wire, open manhole, collapse risk): always a human, whatever the priority.
+  'PUBLIC_SAFETY_HAZARD',
+  // Spam-like or abusive content (rule signals or the model). Never auto-rejected; a human decides.
+  'SPAM_SUSPECTED',
+  // The citizen was asked follow-up questions and hasn't answered yet.
+  'AWAITING_CITIZEN_INFO',
 ] as const;
 export type ReviewReason = (typeof REVIEW_REASONS)[number];
 
@@ -91,15 +97,17 @@ export type DuplicateLinkSource = (typeof DUPLICATE_LINK_SOURCES)[number];
 /**
  * TRIAGE = complaint classification. DUPLICATE_CANDIDATES = possible duplicates (rule-based).
  * MEDIA_AUTHENTICITY = signals of synthetic or edited media for one evidence file.
+ * RESOLUTION_COMPARISON = before/after photo comparison for one resolution evidence file (advisory).
+ * PRIVACY_REDACTION = faces and number plates located by the model and blurred in a shareable copy of one image.
  */
-export const ANALYSIS_TYPES = ['TRIAGE', 'DUPLICATE_CANDIDATES', 'RESOLUTION_VERIFICATION', 'MEDIA_AUTHENTICITY'] as const;
+export const ANALYSIS_TYPES = ['TRIAGE', 'DUPLICATE_CANDIDATES', 'RESOLUTION_VERIFICATION', 'MEDIA_AUTHENTICITY', 'RESOLUTION_COMPARISON', 'PRIVACY_REDACTION'] as const;
 export type AnalysisType = (typeof ANALYSIS_TYPES)[number];
 
 /** PENDING/RUNNING are job states; the rest are final. */
 export const ANALYSIS_STATUSES = ['PENDING', 'RUNNING', 'SUCCEEDED', 'FAILED', 'INVALID_OUTPUT'] as const;
 export type AnalysisStatus = (typeof ANALYSIS_STATUSES)[number];
 
-export const ANALYSIS_TRIGGERS = ['COMPLAINT_CREATED', 'MANUAL_RERUN', 'EVIDENCE_ADDED'] as const;
+export const ANALYSIS_TRIGGERS = ['COMPLAINT_CREATED', 'MANUAL_RERUN', 'EVIDENCE_ADDED', 'FOLLOW_UP_ANSWERED'] as const;
 export type AnalysisTrigger = (typeof ANALYSIS_TRIGGERS)[number];
 
 /** Model's own statement of how sure it is. Not a calibrated probability. */
@@ -120,6 +128,8 @@ export const AUTHENTICITY_SIGNAL_SOURCES = ['FILE_FORMAT', 'PROVENANCE', 'METADA
 export const PROVENANCE_STATES = ['NOT_PRESENT', 'PRESENT_UNVERIFIED'] as const;
 export const RELEVANCE_ASSESSMENTS = ['APPEARS_RELATED', 'APPEARS_UNRELATED', 'UNCLEAR'] as const;
 
+/** Answers of the before/after photo comparison. */
+export const COMPARISON_ANSWERS = ['YES', 'NO', 'UNCLEAR'] as const;
 export const VERIFICATION_OUTCOMES = ['SUFFICIENT', 'INSUFFICIENT', 'UNCERTAIN'] as const;
 export type VerificationOutcome = (typeof VERIFICATION_OUTCOMES)[number];
 
@@ -166,6 +176,9 @@ export const NOTIFICATION_TYPES = [
   'DISPUTE_DECIDED',
   'WORK_ORDER_UPDATED',
   'VERIFICATION_NEEDED',
+  'FOLLOW_UP_REQUESTED',
+  'WORK_ORDER_OVERDUE',
+  'DUPLICATE_LINKED',
 ] as const;
 export type NotificationType = (typeof NOTIFICATION_TYPES)[number];
 
@@ -178,6 +191,22 @@ export type DeliveryStatus = (typeof DELIVERY_STATUSES)[number];
 export const DISPUTE_STATUSES = ['OPEN', 'UNDER_REVIEW', 'UPHELD', 'DISMISSED', 'WITHDRAWN'] as const;
 export const DISPUTE_CATEGORIES = ['NOT_FIXED', 'POOR_QUALITY', 'WRONG_LOCATION', 'OTHER'] as const;
 export type DisputeStatus = (typeof DISPUTE_STATUSES)[number];
+
+/** Kinds of mapped places used for location context and explainable priority. */
+export const PLACE_KINDS = ['SCHOOL', 'HOSPITAL', 'MAIN_ROAD', 'MARKET', 'BUS_STOP', 'PLACE_OF_WORSHIP'] as const;
+export type PlaceKind = (typeof PLACE_KINDS)[number];
+/** Places near which a problem affects vulnerable people or many people. */
+export const SENSITIVE_PLACE_KINDS: readonly PlaceKind[] = ['SCHOOL', 'HOSPITAL', 'MAIN_ROAD'];
+
+/** State of the privacy-blurred copy of an evidence image. */
+// DONE = blurred where needed; METADATA_ONLY = metadata stripped, no face/plate detection ran; FAILED = could not be decoded.
+export const REDACTION_STATES = ['PENDING', 'DONE', 'METADATA_ONLY', 'NOT_SUPPORTED', 'FAILED'] as const;
+export type RedactionState = (typeof REDACTION_STATES)[number];
+export const REDACTION_REGION_KINDS = ['FACE', 'LICENSE_PLATE'] as const;
+
+/** Explainable reasons the rules raised a priority above the model's suggestion. */
+export const PRIORITY_FACTORS = ['NEAR_SENSITIVE_PLACE', 'MANY_REPORTS', 'LONG_STANDING', 'ON_MAIN_ROAD'] as const;
+export type PriorityFactor = (typeof PRIORITY_FACTORS)[number];
 
 export const FEEDBACK_MODERATION_STATES = ['VISIBLE', 'HIDDEN'] as const;
 export type FeedbackModerationState = (typeof FEEDBACK_MODERATION_STATES)[number];

@@ -14,8 +14,11 @@
     "test": "vitest run",
     "db:sync-indexes": "tsx src/scripts/syncIndexes.ts",
     "user:create": "tsx src/scripts/createUser.ts",
+    "db:seed": "tsx src/scripts/seed.ts",
     "user:create:prod": "node dist/scripts/createUser.js",
-    "db:sync-indexes:prod": "node dist/scripts/syncIndexes.js"
+    "db:sync-indexes:prod": "node dist/scripts/syncIndexes.js",
+    "ai:live": "tsx tests/live/aiAgenticFlow.ts",
+    "e2e:live": "tsx tests/live/e2eLive.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^1.3.0",
@@ -27,6 +30,7 @@
     "jose": "^6.2.13",
     "mongoose": "^9.11.4",
     "pino": "^10.4.0",
+    "sharp": "^0.34.4",
     "zod": "^4.6.7"
   },
   "devDependencies": {

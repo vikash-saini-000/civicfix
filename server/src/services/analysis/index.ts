@@ -1,7 +1,7 @@
 import { Types } from 'mongoose';
 import type { AiProvider } from '../../ai/types.js';
 import type { Principal } from '../../auth/roles.js';
-import { AIAnalysis, Complaint, Department, Evidence } from '../../models/index.js';
+import { AIAnalysis, Complaint, Department, Evidence, User } from '../../models/index.js';
 import { AppError, notFoundError } from '../../utils/errors.js';
 import type { Logger } from '../../utils/logger.js';
 import { relationTo, type ComplaintService } from '../complaints.js';
@@ -39,7 +39,23 @@ export function createAnalysisService(opts: AnalysisServiceOptions) {
     if (relation === 'reporter') throw new AppError('FORBIDDEN', 'AI analysis is only available to department staff and administrators.');
   }
 
-  async function classificationView(complaintId: Types.ObjectId) {
+  /** What the triage agent proposed and which tools it used (agent mode only). Staff view. */
+  async function agentView(p: Principal, a: AnalysisDoc) {
+    if (!a.agentTrace) return null;
+    const [assignee, dup] = await Promise.all([
+      a.suggestedAssignee ? User.findById(a.suggestedAssignee).select('name').lean() : null,
+      a.likelyDuplicate ? Complaint.findById(a.likelyDuplicate).select('publicId citizen department').lean() : null,
+    ]);
+    return {
+      turns: a.agentTrace.turns,
+      toolCalls: (a.agentTrace.steps ?? []).map((s: { tool: string; ok: boolean; ms?: number }) => ({ tool: s.tool, ok: s.ok, ms: s.ms ?? null })),
+      proposedAssignee: assignee ? { id: String(assignee._id), name: assignee.name } : null,
+      // Only shown if the viewer could open that complaint anyway.
+      likelyDuplicate: dup && relationTo(p, { citizen: dup.citizen, department: dup.department }) ? { publicId: dup.publicId } : dup ? { publicId: null } : null,
+    };
+  }
+
+  async function classificationView(p: Principal, complaintId: Types.ObjectId) {
     const a = (await AIAnalysis.findOne({ complaint: complaintId, analysisType: 'TRIAGE' }).sort({ analysisVersion: -1 }).lean()) as AnalysisDoc | null;
     if (!a) return { status: 'NOT_ANALYZED' as const };
     const dept = a.suggestedDepartment ? await Department.findById(a.suggestedDepartment).select('name').lean() : null;
@@ -56,9 +72,33 @@ export function createAnalysisService(opts: AnalysisServiceOptions) {
       summary: a.summary ?? null,
       rationale: a.rationale ?? null,
       certainty: a.certainty ?? null,
+      // The model's own estimate (not calibrated). Below 0.7 sends the case to a human.
+      selfReportedConfidence: a.selfReportedConfidence ?? null,
+      publicSafetyHazard: a.publicSafetyHazard ?? null,
+      spamLikely: a.spamLikely ?? null,
+      // Explainable priority: the model's suggestion and each rule that raised it.
+      priority:
+        a.status === 'SUCCEEDED'
+          ? {
+              model: a.modelPriority ?? a.suggestedPriority ?? null,
+              final: a.suggestedPriority ?? null,
+              factors: (a.priorityFactors ?? []).map((f: { factor: string; detail?: string; raisedTo?: string }) => ({ factor: f.factor, detail: f.detail ?? null, raisedTo: f.raisedTo ?? null })),
+            }
+          : null,
+      locationContext: a.locationContext
+        ? {
+            ward: a.locationContext.ward ?? null,
+            nearbyPlaces: (a.locationContext.nearbyPlaces ?? []).map((pl: { name: string; kind: string; distanceMeters: number }) => ({ name: pl.name, kind: pl.kind, distanceMeters: pl.distanceMeters })),
+            openReportsNearby: a.locationContext.openReportsNearby ?? 0,
+            linkedReports: a.locationContext.linkedReports ?? 0,
+          }
+        : null,
+      followUpQuestions: a.followUpQuestions ?? [],
       missingInformation: a.missingInformation ?? [],
       reviewRecommended: a.reviewRecommended ?? null,
       reviewReasons: a.reviewFlags ?? [],
+      mode: a.agentTrace ? ('agent' as const) : ('single' as const),
+      agent: a.status === 'SUCCEEDED' ? await agentView(p, a) : null,
     };
   }
 
@@ -91,10 +131,22 @@ export function createAnalysisService(opts: AnalysisServiceOptions) {
 
   async function authenticityView(complaintId: Types.ObjectId) {
     const evidence = await Evidence.find({ complaint: complaintId }).select('purpose mediaType createdAt').sort({ createdAt: 1 }).lean();
-    const analyses = (await AIAnalysis.find({ complaint: complaintId, analysisType: 'MEDIA_AUTHENTICITY' }).sort({ analysisVersion: -1 }).lean()) as AnalysisDoc[];
+    const [analyses, comparisons] = (await Promise.all([
+      AIAnalysis.find({ complaint: complaintId, analysisType: 'MEDIA_AUTHENTICITY' }).sort({ analysisVersion: -1 }).lean(),
+      AIAnalysis.find({ complaint: complaintId, analysisType: 'RESOLUTION_COMPARISON' }).sort({ analysisVersion: -1 }).lean(),
+    ])) as [AnalysisDoc[], AnalysisDoc[]];
+    const comparisonFor = (id: Types.ObjectId) => {
+      const c = comparisons.find((x) => String(x.evidence) === String(id));
+      if (!c) return undefined;
+      if (isActiveStatus(c.status)) return { status: 'PENDING' as const };
+      return c.status === 'SUCCEEDED' && c.comparison
+        ? { status: 'DONE' as const, sameLocation: c.comparison.sameLocation, issueAppearsFixed: c.comparison.issueAppearsFixed, matchesCategory: c.comparison.matchesCategory, notes: c.comparison.notes ?? '', beforePhotos: c.comparison.beforeCount }
+        : { status: 'NOT_COMPARED' as const, errorCode: c.errorCode ?? null };
+    };
     return evidence.map((e) => {
       const a = analyses.find((x) => String(x.evidence) === String(e._id));
-      const base = { evidenceId: String(e._id), purpose: e.purpose, mediaType: e.mediaType };
+      const comparison = comparisonFor(e._id);
+      const base = { evidenceId: String(e._id), purpose: e.purpose, mediaType: e.mediaType, ...(comparison && { comparison }) };
       if (!a) return { ...base, outcome: 'NOT_ANALYZED' as const };
       if (isActiveStatus(a.status)) return { ...base, outcome: 'ANALYSIS_PENDING' as const, ...jobView(a) };
       return {
@@ -117,14 +169,22 @@ export function createAnalysisService(opts: AnalysisServiceOptions) {
 
     /** Queues classification + duplicate check for a new complaint. */
     queueForNewComplaint: (complaintId: Types.ObjectId) => runner.enqueue(complaintId, JOB_TYPES, 'COMPLAINT_CREATED'),
-    queueForEvidence: (complaintId: Types.ObjectId, evidenceId: Types.ObjectId, requestedBy?: string) => runner.enqueueMedia(complaintId, evidenceId, requestedBy),
+    async queueForEvidence(complaintId: Types.ObjectId, evidenceId: Types.ObjectId, requestedBy?: string, purpose?: string, mediaType?: string) {
+      // Privacy copy first, so staff can open the photo as soon as possible.
+      if (mediaType !== 'VIDEO') await runner.enqueueRedaction(complaintId, evidenceId, requestedBy);
+      const media = await runner.enqueueMedia(complaintId, evidenceId, requestedBy);
+      if (purpose === 'RESOLUTION') await runner.enqueueComparison(complaintId, evidenceId, requestedBy);
+      return media;
+    },
+    /** Re-runs triage after the citizen answered follow-up questions. */
+    queueAfterFollowUp: (complaintId: Types.ObjectId) => runner.enqueue(complaintId, ['TRIAGE'], 'FOLLOW_UP_ANSWERED'),
 
     /** Staff/admin summary. Reporters get 403; anyone who can't see the complaint gets 404. */
     async summary(p: Principal, publicId: string, complaints: ComplaintService) {
       const { complaintId, relation } = await complaints.access(p, publicId);
       requireStaff(relation);
       const [classification, duplicates, media] = await Promise.all([
-        classificationView(complaintId),
+        classificationView(p, complaintId),
         duplicatesView(p, complaintId),
         authenticityView(complaintId),
       ]);

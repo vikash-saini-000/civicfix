@@ -68,6 +68,10 @@ const assignBody = z.strictObject({
   assigneeId: objectId.optional(),
   reason: text(3, 1000),
 });
+// One answer per question, in order; an empty string skips a question.
+const followUpBody = z.strictObject({ answers: z.array(z.string().trim().max(500)).min(1).max(3) });
+const linkDuplicateBody = z.strictObject({ canonicalPublicId: complaintPublicId, reason: text(3, 500) });
+const unlinkBody = z.strictObject({ reason: text(3, 500) });
 const rerunBody = z.strictObject({
   types: z
     .array(z.enum(JOB_TYPES))
@@ -132,6 +136,22 @@ export function complaintsRouter({
     const { publicId } = input<Params>(req, 'params');
     const { reason } = input<{ reason: string }>(req, 'body');
     sendSuccess(res, { complaint: await complaintService.reject(req.auth!, publicId, reason, req.id) });
+  });
+
+  router.post('/:publicId/follow-up', validate({ params, body: followUpBody }), async (req, res) => {
+    const { publicId } = input<Params>(req, 'params');
+    const { answers } = input<{ answers: string[] }>(req, 'body');
+    sendSuccess(res, { complaint: await complaintService.answerFollowUp(req.auth!, publicId, answers, req.id) });
+  });
+
+  router.post('/:publicId/duplicate-of', validate({ params, body: linkDuplicateBody }), async (req, res) => {
+    const { publicId } = input<Params>(req, 'params');
+    sendSuccess(res, { complaint: await complaintService.linkDuplicate(req.auth!, publicId, input<{ canonicalPublicId: string; reason: string }>(req, 'body'), req.id) });
+  });
+
+  router.post('/:publicId/duplicate-of/remove', validate({ params, body: unlinkBody }), async (req, res) => {
+    const { publicId } = input<Params>(req, 'params');
+    sendSuccess(res, { complaint: await complaintService.unlinkDuplicate(req.auth!, publicId, input<{ reason: string }>(req, 'body').reason, req.id) });
   });
 
   router.post('/:publicId/assign', validate({ params, body: assignBody }), async (req, res) => {

@@ -86,7 +86,7 @@ The file bytes, with `Cache-Control: private, no-store` and `Content-Disposition
 - **Allowed** when the work order is `IN_PROGRESS`, or `VERIFICATION_REQUIRED` (resubmitting with more evidence).
 - **Result:** the work order and complaint go to `RESOLUTION_SUBMITTED`. **This is not resolved.**
 
-Then rule-based checks run (policy `verify-v1`). The result is stored as an `AIAnalysis` record of type `RESOLUTION_VERIFICATION`, and returned:
+Then rule-based checks run (policy `verify-v2`). The result is stored as an `AIAnalysis` record of type `RESOLUTION_VERIFICATION`, and returned:
 
 ```json
 { "success": true, "data": { "workOrder": { … }, "assessment": { "outcome": "UNCERTAIN", "reasons": ["Authenticity checks have not finished for every file."], "missingEvidence": [] } } }
@@ -97,11 +97,14 @@ Then rule-based checks run (policy `verify-v1`). The result is stored as an `AIA
 | At least 1 resolution file | `INSUFFICIENT` |
 | Every file uploaded after the work was assigned | `INSUFFICIENT` |
 | Every file's authenticity check finished with `NO_SUSPICIOUS_SIGNALS_DETECTED` | `UNCERTAIN` (flagged, pending, or inconclusive) |
+| Every file has GPS within **50 m** of the reported location (`maxCaptureDistanceMeters`) | `UNCERTAIN` (too far, with the distance; or no GPS when `requireCaptureLocation`) |
+| No file's capture time is more than 14 h before the assignment (EXIF times often lack a time zone) | `UNCERTAIN` |
+| Every file's before/after comparison finished and shows the issue fixed, at the same place, matching the category (`requireVisualComparison`) | `UNCERTAIN` (pending, not comparable, failed, `NO`, or fix `UNCLEAR`) |
 
 - **`SUFFICIENT`**: stays `RESOLUTION_SUBMITTED` for a human verifier. Auto-approval only happens if `AUTO_APPROVE_RESOLUTIONS=true` (off by default; product-owner decision).
 - **`UNCERTAIN` / `INSUFFICIENT`**: moves to `VERIFICATION_REQUIRED` (flagged for the verifier).
 
-AI results can only make the outcome more cautious; nothing approves a fix because a photo "looks fixed". A photo never proves a repair is safe, complete or durable.
+AI results and photo metadata can only make the outcome more cautious; nothing approves a fix because a photo "looks fixed". A photo never proves a repair is safe, complete or durable. GPS and capture time come from the uploaded JPEG's EXIF (stored on the evidence record, never returned by these APIs); they are uploader-controlled hints, so a match is not proof either. The new policy values (50 m, GPS required, comparison required) need product-owner sign-off.
 
 ### POST /api/v1/work-orders/:id/verification (verifier)
 

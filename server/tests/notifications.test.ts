@@ -11,13 +11,13 @@ import { AIAnalysis, AuditLog, AuthSession, Complaint, Counter, Department, Depa
 import { createAnalysisService, type AnalysisService } from '../src/services/analysis/index.js';
 import { createMemoryStorage } from '../src/storage/index.js';
 import { createLogger, type Logger } from '../src/utils/logger.js';
-import { testAuthConfig } from './helpers.js';
+import { jpegWithExif, testAuthConfig } from './helpers.js';
 import { testMongo } from './mongo.js';
 
 const silent = createLogger({ logLevel: 'silent', nodeEnv: 'test' });
 const PASSWORD = 'phase ten password';
 const many = { windowMs: 60_000, limit: 10_000 };
-const out = (o: Partial<ClassificationOutput> = {}): ClassificationOutput => ({ category: 'roads', departmentRef: 'D1', priority: 'P2', certainty: 'HIGH', summary: 'Pothole.', rationale: 'Road.', missingInformation: [], reviewRecommended: false, reviewReasons: [], ...o });
+const out = (o: Partial<ClassificationOutput> = {}): ClassificationOutput => ({ category: 'roads', departmentRef: 'D1', priority: 'P2', certainty: 'HIGH', summary: 'Pothole.', rationale: 'Road.', missingInformation: [], reviewRecommended: false, reviewReasons: [], confidence: 0.92, publicSafetyHazard: false, spamLikely: false, followUpQuestions: [], ...o });
 const provider = (o: ClassificationOutput): AiProvider => ({
   name: 'fake',
   model: 'fake-1',
@@ -28,8 +28,11 @@ const provider = (o: ClassificationOutput): AiProvider => ({
   async assessImage() {
     return { output: { visualInconsistency: 'NONE_OBSERVED', inconsistencyNotes: '', relevance: 'APPEARS_RELATED', relevanceNotes: '' }, meta: { provider: 'fake', model: 'fake-1', promptVersion: 'v1', latencyMs: 1 } };
   },
+  async compareResolution() {
+    return { output: { sameLocation: 'YES', issueAppearsFixed: 'YES', matchesCategory: 'YES', notes: 'Pothole filled; same kerb and pole.' }, meta: { provider: 'fake', model: 'fake-1', promptVersion: 'v1', latencyMs: 1 } };
+  },
 });
-const jpeg = () => Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.from(`JFIF${Math.random()}`), Buffer.alloc(200, 1)]);
+const jpeg = () => jpegWithExif({ lat: 13.0, lng: 74.79 }); // GPS at the reported spot
 
 const MODELS = [User, Department, DepartmentMembership, AuthSession, Complaint, Counter, Evidence, AIAnalysis, WorkOrder, Dispute, Notification] as unknown as (typeof User)[];
 beforeAll(async () => {
@@ -156,11 +159,21 @@ describe('notification recipients', () => {
     await seed();
     const c = (await call('post', '/complaints', alice, report)).body.data.complaint;
     await settle();
+    // The AI suggested Roads, so Roads managers get the routing decision (not every admin).
+    expect(await typesFor(mgr)).toEqual(['MANAGER_REVIEW_REQUIRED']);
+    expect(await typesFor(admin)).toEqual([]);
+    await call('post', `/complaints/${c.publicId}/classify`, admin, { departmentId: roads, category: 'roads' });
+    expect(await typesFor(mgr)).toEqual(['MANAGER_REVIEW_REQUIRED', 'MANAGER_REVIEW_REQUIRED']);
+    expect(await typesFor(waterMgr)).toEqual([]);
+  });
+
+  it('routing reviews with no usable department suggestion go to admins', async () => {
+    build(out({ certainty: 'LOW', departmentRef: null }));
+    await seed();
+    await call('post', '/complaints', alice, report);
+    await settle();
     expect(await typesFor(admin)).toEqual(['MANAGER_REVIEW_REQUIRED']);
     expect(await typesFor(mgr)).toEqual([]);
-    await call('post', `/complaints/${c.publicId}/classify`, admin, { departmentId: roads, category: 'roads' });
-    expect(await typesFor(mgr)).toEqual(['MANAGER_REVIEW_REQUIRED']);
-    expect(await typesFor(waterMgr)).toEqual([]);
   });
 
   it('skips inactive accounts and failed or unauthorized actions', async () => {

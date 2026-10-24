@@ -1,6 +1,22 @@
 import { Schema, model, type InferSchemaType } from 'mongoose';
 import { geoPointSchema } from './common.js';
-import { ALLOWED_CONTENT_TYPES, EVIDENCE_PURPOSES, EVIDENCE_VERIFICATION_STATES, MEDIA_TYPES } from './enums.js';
+import { ALLOWED_CONTENT_TYPES, EVIDENCE_PURPOSES, EVIDENCE_VERIFICATION_STATES, MEDIA_TYPES, REDACTION_STATES } from './enums.js';
+
+/**
+ * Shareable copy of an image: metadata (EXIF GPS etc.) stripped, faces and number plates blurred.
+ * The original stays for verification; downloads serve this copy to everyone but the uploader and admins.
+ */
+const redactionSchema = new Schema(
+  {
+    state: { type: String, enum: REDACTION_STATES, required: true },
+    storageKey: { type: String, trim: true, maxlength: 500 },
+    contentType: { type: String, enum: ALLOWED_CONTENT_TYPES },
+    faces: { type: Number, min: 0, default: 0 },
+    licensePlates: { type: Number, min: 0, default: 0 },
+    updatedAt: { type: Date, required: true },
+  },
+  { _id: false },
+);
 
 export const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 export const MAX_VIDEO_BYTES = 50 * 1024 * 1024;
@@ -67,6 +83,7 @@ const evidenceSchema = new Schema(
 
     notes: { type: String, trim: true, maxlength: 1000 },
     verificationState: { type: String, enum: EVIDENCE_VERIFICATION_STATES, required: true, default: 'PENDING' },
+    redaction: { type: redactionSchema },
   },
   { timestamps: true },
 );

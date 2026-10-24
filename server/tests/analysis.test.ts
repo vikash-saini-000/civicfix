@@ -4,7 +4,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import mongoose from 'mongoose';
 import { testMongo } from './mongo.js';
 import request from 'supertest';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createAnthropicProvider } from '../src/ai/anthropicProvider.js';
 import { AiProviderError, disabledProvider, type AiProvider, type ClassificationInput, type ClassificationOutput, type ImageAssessment } from '../src/ai/types.js';
 import { createApp } from '../src/app.js';
@@ -56,6 +56,10 @@ const good = (overrides: Partial<ClassificationOutput> = {}): ClassificationOutp
   missingInformation: [],
   reviewRecommended: false,
   reviewReasons: [],
+  confidence: 0.92,
+  publicSafetyHazard: false,
+  spamLikely: false,
+  followUpQuestions: [],
   ...overrides,
 });
 
@@ -189,7 +193,7 @@ describe('classification', () => {
     await file(alice, { landmark: 'Bus stop' });
     await settle();
     const input = script.calls[0]!;
-    expect(Object.keys(input).sort()).toEqual(['citizenCategory', 'departments', 'description', 'landmark', 'title']);
+    expect(Object.keys(input).sort()).toEqual(['citizenCategory', 'departments', 'description', 'followUp', 'landmark', 'locationContext', 'title']);
     expect(input.departments).toEqual([
       { ref: 'D1', name: 'A Roads Dept', categories: ['roads', 'drainage'] },
       { ref: 'D2', name: 'B Water Dept', categories: ['water'] },
@@ -251,6 +255,31 @@ describe('classification', () => {
       await settle();
       expect(await latest(c.id, 'TRIAGE')).toMatchObject({ status, errorCode: err.kind, attempts: 1 });
       expect(script.calls).toHaveLength(1);
+    }
+  });
+
+  it('a gateway rejection (no prepaid balance, bad key, unknown model) leaves the complaint untouched for manual triage', async () => {
+    const headers = new Headers();
+    const rejections: [unknown, string, number][] = [
+      [new Anthropic.APIError(402, { type: 'error', error: { type: 'billing_error', message: 'Insufficient balance' } }, 'no funds', headers), 'BAD_REQUEST', 1],
+      [new Anthropic.AuthenticationError(401, { type: 'error', error: { type: 'authentication_error', message: 'bad key' } }, 'bad key', headers), 'AUTH_FAILED', 1],
+      // 503 = no provider for this model on AiCredits: transient-looking, so bounded retries, then manual triage.
+      [new Anthropic.InternalServerError(503, { type: 'error', error: { type: 'service_unavailable', message: 'no provider' } }, 'n/a', headers), 'UNAVAILABLE', 3],
+    ];
+    for (const [thrown, kind, attempts] of rejections) {
+      let calls = 0;
+      const client = { beta: { messages: { async parse() { calls++; throw thrown; } } } } as unknown as Anthropic;
+      const config = { provider: 'anthropic' as const, apiKey: 'sk-test-not-real', baseURL: 'https://api.aicredits.in', model: 'anthropic/claude-sonnet-4.6', timeoutMs: 1000, maxAttempts: 3 };
+      build(createAnthropicProvider(config, client));
+      const c = await file(alice);
+      await settle();
+      expect(await latest(c.id, 'TRIAGE')).toMatchObject({ status: 'FAILED', errorCode: kind, attempts });
+      expect(calls).toBe(attempts);
+      const stored = await Complaint.findById(c.id).lean();
+      expect(stored).toMatchObject({ status: 'REPORTED' });
+      expect(stored!.department).toBeUndefined();
+      expect(stored!.priority).toBeUndefined();
+      expect(stored!.confirmedCategory).toBeUndefined();
     }
   });
 
@@ -356,7 +385,7 @@ describe('duplicate candidates', () => {
   });
 
   it('bounds the number of complaints examined and suggestions stored', async () => {
-    build(disabledProvider, { duplicateSettings: { radiusMeters: 150, windowDays: 14, maxCandidates: 4, maxSuggestions: 2, minSimilarity: 0.1 } });
+    build(disabledProvider, { duplicateSettings: { radiusMeters: 150, windowDays: 14, maxCandidates: 4, maxSuggestions: 2, minSimilarity: 0.1, minSemanticSimilarity: 0.7 } });
     await resetData();
     for (let i = 0; i < 8; i++) await file(alice);
     const target = await file(bob);
@@ -522,6 +551,83 @@ describe('Anthropic adapter (fake client)', () => {
     const { client, seen } = fakeClient(ok(good()));
     await createAnthropicProvider({ ...config, model: 'claude-haiku-5-5' }, client).classifyComplaint(input);
     expect(seen[0].params.fallbacks).toBeUndefined();
+  });
+
+  it('keeps structured output for gateway model IDs, and drops effort only where the model rejects it', async () => {
+    for (const [model, effort] of [
+      ['anthropic/claude-sonnet-4.6', 'low'],
+      ['anthropic/claude-opus-4.5', 'low'],
+      ['anthropic/claude-haiku-4.5', undefined],
+      ['anthropic/claude-sonnet-4.5', undefined],
+      ['claude-haiku-4-5', undefined],
+    ] as const) {
+      const { client, seen } = fakeClient(ok(good()));
+      await createAnthropicProvider({ ...config, model }, client).classifyComplaint(input);
+      const { params } = seen[0];
+      expect(params.model).toBe(model);
+      expect(params.output_config.effort).toBe(effort);
+      expect(params.output_config.format.type).toBe('json_schema');
+      expect(params.fallbacks).toBeUndefined();
+      expect(params.betas).toEqual([]);
+    }
+  });
+});
+
+describe('Anthropic adapter via AiCredits.in (real SDK, stubbed fetch, no network)', () => {
+  const KEY = 'sk-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
+  const config = { provider: 'anthropic' as const, apiKey: KEY, baseURL: 'https://api.aicredits.in', model: 'anthropic/claude-sonnet-4.6', timeoutMs: 1000, maxAttempts: 3 };
+  const input: ClassificationInput = { title: 'Pothole', description: 'Deep pothole.', landmark: null, citizenCategory: null, departments: [{ ref: 'D1', name: 'Roads', categories: ['roads'] }] };
+  const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json', 'request-id': 'req_test' } });
+  const requests: Request[] = [];
+  function stubFetch(response: () => Response) {
+    requests.length = 0;
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, init) => {
+      requests.push(new Request(url as string, init));
+      return response();
+    });
+  }
+  beforeEach(() => {
+    // Credentials and host from the environment must never reach the gateway.
+    vi.stubEnv('ANTHROPIC_AUTH_TOKEN', 'sk-ant-oat-must-not-leak');
+    vi.stubEnv('ANTHROPIC_BASE_URL', 'https://wrong-host.example');
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+  });
+
+  it('sends only the AiCredits key to api.aicredits.in/v1/messages, with a JSON-schema output format', async () => {
+    const out = good();
+    stubFetch(() =>
+      json(200, {
+        id: 'msg_1', type: 'message', role: 'assistant', model: 'anthropic/claude-sonnet-4.6', stop_reason: 'end_turn', stop_sequence: null,
+        content: [{ type: 'text', text: JSON.stringify(out) }], usage: { input_tokens: 12, output_tokens: 7 },
+      }),
+    );
+    const res = await createAnthropicProvider(config).classifyComplaint(input);
+    expect(res.output).toEqual(out);
+    expect(res.meta).toMatchObject({ provider: 'anthropic', model: 'anthropic/claude-sonnet-4.6', inputTokens: 12 });
+    expect(requests).toHaveLength(1);
+    const req = requests[0]!;
+    expect(new URL(req.url).origin + new URL(req.url).pathname).toBe('https://api.aicredits.in/v1/messages');
+    // SDK 1.x sends the key as a Bearer token, which is AiCredits' documented auth header.
+    expect(req.headers.get('authorization')).toBe(`Bearer ${KEY}`);
+    expect([...req.headers.values()].join(' ')).not.toContain('sk-ant-oat-must-not-leak');
+    expect(req.headers.get('anthropic-beta') ?? '').not.toContain('server-side-fallback');
+    const body = await req.json();
+    expect(body).toMatchObject({ model: 'anthropic/claude-sonnet-4.6', output_config: { effort: 'low', format: { type: 'json_schema' } } });
+    expect(body.fallbacks).toBeUndefined();
+  });
+
+  it('maps an insufficient-balance 402 to a permanent failure whose log detail hides the key', async () => {
+    stubFetch(() => json(402, { type: 'error', error: { type: 'billing_error', message: `Insufficient balance for key ${KEY}` }, request_id: 'req_test' }));
+    const err = await createAnthropicProvider(config).classifyComplaint(input).catch((e) => e);
+    expect(err).toBeInstanceOf(AiProviderError);
+    expect(err).toMatchObject({ kind: 'BAD_REQUEST', retryable: false });
+    expect(err.detail).toContain('billing_error');
+    expect(err.detail).not.toContain(KEY);
+    expect(err.message).not.toContain(KEY);
+    expect(requests).toHaveLength(1); // the SDK itself does not retry
   });
 });
 

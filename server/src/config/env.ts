@@ -43,15 +43,32 @@ export interface VerificationConfig {
 export const AI_PROVIDERS = ['disabled', 'anthropic'] as const;
 export type AiProviderName = (typeof AI_PROVIDERS)[number];
 
+/** AiCredits.in prepaid gateway for the Anthropic Messages API. Fixed (not configurable) so the key only ever goes to this host. */
+export const AICREDITS_BASE_URL = 'https://api.aicredits.in';
+
 export interface AiConfig {
   /** `disabled` keeps everything working without AI: complaints go to manual triage. */
   provider: AiProviderName;
   apiKey?: string;
+  /** Set when Anthropic calls go through a gateway (AiCredits.in) instead of api.anthropic.com. */
+  baseURL?: string;
   model: string;
   timeoutMs: number;
   /** Attempts per analysis job, including the first. Only transient failures are retried. */
   maxAttempts: number;
+  /** `single` = one classification call per complaint; `agent` = bounded tool-using triage agent. */
+  triageMode: AiTriageMode;
+  /** Max model calls per agent run (agent mode only). */
+  agentMaxTurns: number;
+  /**
+   * Semantic duplicate search (OpenAI-compatible embeddings through the same gateway). Only available
+   * with AICREDITS_API_KEY; `null` = off (duplicates use word overlap).
+   */
+  embeddingModel: string | null;
 }
+
+export const AI_TRIAGE_MODES = ['single', 'agent'] as const;
+export type AiTriageMode = (typeof AI_TRIAGE_MODES)[number];
 
 export const SAME_SITE_VALUES = ['strict', 'lax', 'none'] as const;
 export type SameSite = (typeof SAME_SITE_VALUES)[number];
@@ -154,11 +171,29 @@ export function loadConfig(env: Env = process.env): Config {
   const aiProvider = (read('AI_PROVIDER') ?? 'disabled') as AiProviderName;
   if (!AI_PROVIDERS.includes(aiProvider)) issues.push(`AI_PROVIDER must be one of ${AI_PROVIDERS.join(', ')}`);
   const anthropicKey = read('ANTHROPIC_API_KEY');
-  if (aiProvider === 'anthropic' && !anthropicKey) issues.push('ANTHROPIC_API_KEY is required when AI_PROVIDER=anthropic');
-  const aiModel = read('AI_MODEL') ?? 'claude-opus-5-5';
-  if (!/^[a-z0-9][a-z0-9.-]{2,63}$/.test(aiModel)) issues.push('AI_MODEL must be a model ID like claude-opus-5-5');
+  const aicreditsKey = read('AICREDITS_API_KEY');
+  if (aiProvider === 'anthropic') {
+    // Exactly one key, so it is never ambiguous which account gets billed.
+    if (anthropicKey && aicreditsKey) issues.push('Set only one of ANTHROPIC_API_KEY or AICREDITS_API_KEY');
+    else if (!anthropicKey && !aicreditsKey) issues.push('ANTHROPIC_API_KEY or AICREDITS_API_KEY is required when AI_PROVIDER=anthropic');
+  }
+  const viaAiCredits = aiProvider === 'anthropic' && !!aicreditsKey && !anthropicKey;
+  const aiModelRaw = read('AI_MODEL');
+  // AiCredits uses its own model IDs, so the direct-API default would not be valid there.
+  if (viaAiCredits && !aiModelRaw) issues.push('AI_MODEL is required with AICREDITS_API_KEY (an ID from the AiCredits catalog, e.g. anthropic/claude-sonnet-4.6)');
+  const aiModel = aiModelRaw ?? 'claude-opus-5-5';
+  // Optional "vendor/" prefix for gateway IDs such as anthropic/claude-sonnet-4.6.
+  if (!/^(?:[a-z0-9-]{2,32}\/)?[a-z0-9][a-z0-9.-]{2,63}$/.test(aiModel)) issues.push('AI_MODEL must be a model ID like claude-opus-5-5 or anthropic/claude-sonnet-4.6');
   const aiTimeoutMs = int('AI_TIMEOUT_MS', 30_000, 5_000, 120_000);
   const aiMaxAttempts = int('AI_MAX_ATTEMPTS', 3, 1, 5);
+  const aiTriageMode = (read('AI_TRIAGE_MODE') ?? 'single') as AiTriageMode;
+  if (!AI_TRIAGE_MODES.includes(aiTriageMode)) issues.push(`AI_TRIAGE_MODE must be one of ${AI_TRIAGE_MODES.join(', ')}`);
+  const aiAgentMaxTurns = int('AI_AGENT_MAX_TURNS', 6, 2, 10);
+  // On by default through AiCredits (about $0.000002 per complaint); "disabled" turns it off.
+  const embeddingRaw = read('EMBEDDING_MODEL') ?? (viaAiCredits ? 'text-embedding-3-small' : 'disabled');
+  if (embeddingRaw !== 'disabled' && !/^(?:[a-z0-9-]{2,32}\/)?[a-z0-9][a-z0-9.-]{2,63}$/.test(embeddingRaw)) issues.push('EMBEDDING_MODEL must be a model ID like text-embedding-3-small, or disabled');
+  if (embeddingRaw !== 'disabled' && !viaAiCredits) issues.push('EMBEDDING_MODEL needs AI_PROVIDER=anthropic with AICREDITS_API_KEY (or set it to disabled)');
+  const embeddingModel = embeddingRaw === 'disabled' ? null : embeddingRaw;
 
   const storageProvider = (read('STORAGE_PROVIDER') ?? 'disabled') as StorageConfig['provider'];
   if (!STORAGE_PROVIDERS.includes(storageProvider)) issues.push(`STORAGE_PROVIDER must be one of ${STORAGE_PROVIDERS.join(', ')}`);
@@ -184,7 +219,17 @@ export function loadConfig(env: Env = process.env): Config {
     dbServerSelectionTimeoutMs,
     trustProxyHops,
     auth: { jwtSecret, accessTokenTtlSeconds, refreshTokenTtlDays, cookieSecure, cookieSameSite },
-    ai: { provider: aiProvider, apiKey: anthropicKey, model: aiModel, timeoutMs: aiTimeoutMs, maxAttempts: aiMaxAttempts },
+    ai: {
+      provider: aiProvider,
+      apiKey: viaAiCredits ? aicreditsKey : anthropicKey,
+      baseURL: viaAiCredits ? AICREDITS_BASE_URL : undefined,
+      model: aiModel,
+      timeoutMs: aiTimeoutMs,
+      maxAttempts: aiMaxAttempts,
+      triageMode: aiTriageMode,
+      agentMaxTurns: aiAgentMaxTurns,
+      embeddingModel,
+    },
     storage: { provider: storageProvider, localDir: storageLocalDir },
     verification: { autoApprove: autoApproveRaw === 'true', disputeWindowDays },
   };

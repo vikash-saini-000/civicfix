@@ -94,6 +94,8 @@ const workOrderSchema = new Schema(
     managerReview: { type: managerReviewSchema },
 
     dueAt: { type: Date },
+    // Set once by the SLA monitor when an open work order passes dueAt (alerts are sent once).
+    slaBreachedAt: { type: Date },
     acceptedAt: { type: Date },
     startedAt: { type: Date },
 
@@ -143,6 +145,7 @@ workOrderSchema.index(
   { partialFilterExpression: { 'managerReview.requestedAt': { $exists: true } } },
 );
 workOrderSchema.index({ status: 1, dueAt: 1 }); // overdue checks
+workOrderSchema.index({ slaBreachedAt: 1, dueAt: 1 }); // SLA monitor
 
 export type WorkOrderFields = InferSchemaType<typeof workOrderSchema>;
 export const WorkOrder = model('WorkOrder', workOrderSchema);

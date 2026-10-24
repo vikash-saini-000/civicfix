@@ -2,7 +2,9 @@ import { Types } from 'mongoose';
 import type { Principal } from '../auth/roles.js';
 import type { EventBus } from '../events/bus.js';
 import type { DisputeStatus } from '../models/enums.js';
-import { AIAnalysis, Complaint, Dispute, Evidence, Feedback, WorkOrder } from '../models/index.js';
+import { AIAnalysis, AuditLog, Complaint, Dispute, Evidence, Feedback, WorkOrder } from '../models/index.js';
+import { transitionFor } from '../policies/complaintLifecycle.js';
+import { distanceMeters } from './analysis/exif.js';
 import { AppError, notFoundError, validationError } from '../utils/errors.js';
 import { paginationMeta, toSkipLimit, type PaginationQuery } from '../validation/pagination.js';
 import { auditUserAction } from './audit.js';
@@ -18,23 +20,36 @@ export interface VerificationPolicy {
   autoApprove: boolean;
   /** Days after resolution in which the citizen may dispute, and before which staff may not close. */
   disputeWindowDays: number;
+  /** Resolution photos must carry GPS within this distance of the reported location. */
+  maxCaptureDistanceMeters: number;
+  /** Treat a resolution photo without GPS as "location unconfirmed" (uncertain). */
+  requireCaptureLocation: boolean;
+  /** Require a finished before/after comparison that shows the fix (advisory AI check). */
+  requireVisualComparison: boolean;
 }
 
 export const DEFAULT_VERIFICATION_POLICY: VerificationPolicy = {
-  version: 'verify-v1',
+  version: 'verify-v3',
   minResolutionEvidence: 1,
   autoApprove: false,
   disputeWindowDays: 14,
+  maxCaptureDistanceMeters: 50,
+  requireCaptureLocation: true,
+  requireVisualComparison: true,
 };
+
+/** EXIF times usually have no time zone, so "taken before assignment" allows this much slack. */
+const CAPTURE_TIME_SLACK_MS = 14 * 3_600_000;
 
 export type VerificationOutcome = 'SUFFICIENT' | 'INSUFFICIENT' | 'UNCERTAIN';
 
 /**
  * Rule-based check of a resolution submission. Photos never prove a repair is safe or durable; these
- * rules only decide whether the submission is complete and free of warning signs. AI authenticity
- * results can only make the outcome more cautious, never approve anything.
+ * rules only decide whether the submission is complete and free of warning signs. AI results
+ * (authenticity, before/after comparison) and photo metadata (GPS, capture time) can only make the
+ * outcome more cautious, never approve anything.
  */
-export async function assessResolution(wo: { _id: Types.ObjectId; assignedAt?: Date | null }, evidenceIds: Types.ObjectId[], policy: VerificationPolicy) {
+export async function assessResolution(wo: { _id: Types.ObjectId; complaint: Types.ObjectId; assignedAt?: Date | null }, evidenceIds: Types.ObjectId[], policy: VerificationPolicy) {
   const reasons: string[] = [];
   const missing: string[] = [];
   let outcome: VerificationOutcome = 'SUFFICIENT';
@@ -46,10 +61,64 @@ export async function assessResolution(wo: { _id: Types.ObjectId; assignedAt?: D
     worse('INSUFFICIENT');
     missing.push(`at least ${policy.minResolutionEvidence} resolution photo or video`);
   }
-  const evidence = await Evidence.find({ _id: { $in: evidenceIds } }).select('createdAt').lean();
+  const [evidence, complaint] = await Promise.all([
+    Evidence.find({ _id: { $in: evidenceIds } }).select('createdAt capturedAt captureLocation sha256').lean(),
+    Complaint.findById(wo.complaint).select('location').lean(),
+  ]);
   if (wo.assignedAt && evidence.some((e) => e.createdAt && e.createdAt < wo.assignedAt!)) {
     worse('INSUFFICIENT');
     reasons.push('Some evidence was uploaded before the work was assigned.');
+  }
+  if (wo.assignedAt && evidence.some((e) => e.capturedAt && e.capturedAt.getTime() < wo.assignedAt!.getTime() - CAPTURE_TIME_SLACK_MS)) {
+    worse('UNCERTAIN');
+    reasons.push('A resolution photo appears to have been taken before the work was assigned.');
+  }
+
+  // Re-used files: a resolution photo that is a byte-for-byte copy of an earlier upload (for example the
+  // citizen's own "before" photo, or proof from another job) proves nothing about this fix.
+  for (const e of evidence) {
+    if (e.sha256 && (await Evidence.exists({ sha256: e.sha256, _id: { $ne: e._id }, createdAt: { $lte: e.createdAt } }))) {
+      worse('INSUFFICIENT');
+      reasons.push('A resolution photo is an exact copy of a file that was uploaded earlier.');
+    }
+  }
+
+  // GPS: the photo should have been taken at the reported place.
+  const reported = complaint?.location?.coordinates;
+  for (const e of evidence) {
+    const at = e.captureLocation?.coordinates;
+    if (at && reported) {
+      const d = Math.round(distanceMeters({ lng: reported[0]!, lat: reported[1]! }, { lng: at[0]!, lat: at[1]! }));
+      if (d > policy.maxCaptureDistanceMeters) {
+        worse('UNCERTAIN');
+        reasons.push(`A resolution photo was taken about ${d} m from the reported location (limit ${policy.maxCaptureDistanceMeters} m).`);
+      }
+    } else if (policy.requireCaptureLocation) {
+      worse('UNCERTAIN');
+      reasons.push('The location of a resolution photo could not be confirmed (no GPS data in the file).');
+    }
+  }
+
+  // Before/after comparison (advisory AI): it can only raise doubts.
+  if (policy.requireVisualComparison) {
+    const comparisons = await AIAnalysis.find({ evidence: { $in: evidenceIds }, analysisType: 'RESOLUTION_COMPARISON' }).sort({ analysisVersion: -1 }).select('evidence status comparison').lean();
+    for (const id of evidenceIds) {
+      const latest = comparisons.find((c) => String(c.evidence) === String(id));
+      const c = latest?.comparison;
+      if (!latest || latest.status === 'PENDING' || latest.status === 'RUNNING') {
+        worse('UNCERTAIN');
+        reasons.push('The before/after photo comparison has not finished for every file.');
+      } else if (latest.status !== 'SUCCEEDED' || !c) {
+        worse('UNCERTAIN');
+        reasons.push('The before/after photo comparison could not be run for every file.');
+      } else {
+        if (c.issueAppearsFixed === 'NO') reasons.push('The before/after comparison suggests the problem is still visible.');
+        else if (c.issueAppearsFixed !== 'YES') reasons.push('The before/after comparison could not confirm the fix.');
+        if (c.sameLocation === 'NO') reasons.push('The after photo may not show the same place as the report.');
+        if (c.matchesCategory === 'NO') reasons.push('The work shown does not seem to match the reported problem.');
+        if (c.issueAppearsFixed !== 'YES' || c.sameLocation === 'NO' || c.matchesCategory === 'NO') worse('UNCERTAIN');
+      }
+    }
   }
   const checks = await AIAnalysis.find({ evidence: { $in: evidenceIds }, analysisType: 'MEDIA_AUTHENTICITY' }).sort({ analysisVersion: -1 }).select('evidence status authenticity').lean();
   for (const id of evidenceIds) {
@@ -66,7 +135,7 @@ export async function assessResolution(wo: { _id: Types.ObjectId; assignedAt?: D
       reasons.push('Authenticity could not be assessed for every file.');
     }
   }
-  if (outcome === 'SUFFICIENT') reasons.push('Required evidence is present, uploaded after assignment, with no warning signs.');
+  if (outcome === 'SUFFICIENT') reasons.push('Required evidence is present, taken at the reported place after assignment, shows the fix, and has no warning signs.');
   return { outcome, reasons: [...new Set(reasons)], missingEvidence: missing };
 }
 
@@ -103,6 +172,21 @@ export function createResolutionService(deps: ResolutionServiceDeps) {
       verification: { outcome: assessment.outcome, reasons: assessment.reasons, missingEvidence: assessment.missingEvidence, evidence: evidenceIds },
       reviewRecommended: assessment.outcome !== 'SUFFICIENT',
     });
+  }
+
+  /** Linked duplicates still in triage close with their original report (each one audited and notified). */
+  async function closeLinkedDuplicates(originalId: Types.ObjectId, originalPublicId: string, now: Date) {
+    const { from, to } = transitionFor('close_with_original');
+    const dups = await Complaint.find({ 'duplicateOf.complaint': originalId, status: { $in: from } }).select('_id status').limit(500).lean();
+    for (const d of dups) {
+      const res = await Complaint.updateOne(
+        { _id: d._id, status: d.status },
+        { $set: { status: to, closedAt: now }, $push: { statusHistory: { status: to, at: now, publicNote: `Closed together with ${originalPublicId}, the report this one was linked to. The problem was fixed there.` } } },
+      );
+      if (res.modifiedCount !== 1) continue;
+      await AuditLog.create({ actorType: 'SYSTEM', action: 'complaint.closed_with_original', targetType: 'Complaint', targetId: d._id, outcome: 'SUCCESS', reason: `original ${originalPublicId} closed`, changes: [{ field: 'status', before: d.status, after: to }] });
+      await events.emit('complaint.status_changed', { complaintId: String(d._id), from: d.status, to, note: `Closed together with ${originalPublicId}.` }, `${d._id}:CLOSED:with-original`);
+    }
   }
 
   function disputeView(d: Record<string, any>) {
@@ -320,6 +404,7 @@ export function createResolutionService(deps: ResolutionServiceDeps) {
       }
       await auditUserAction({ actor: p, action: 'complaint.closed', targetType: 'Complaint', targetId: complaintId, requestId, changes: [{ field: 'status', before: 'RESOLVED', after: 'CLOSED' }] });
       await events.emit('complaint.status_changed', { complaintId: String(complaintId), from: 'RESOLVED', to: 'CLOSED' }, `${complaintId}:CLOSED`);
+      await closeLinkedDuplicates(complaintId, closed.publicId, now);
       return deps.complaints.get(p, publicId);
     },
 

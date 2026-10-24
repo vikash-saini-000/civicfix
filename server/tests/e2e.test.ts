@@ -9,12 +9,12 @@ import { AIAnalysis, AuditLog, User } from '../src/models/index.js';
 import { createAnalysisService } from '../src/services/analysis/index.js';
 import { createMemoryStorage } from '../src/storage/index.js';
 import { createLogger } from '../src/utils/logger.js';
-import { testAuthConfig } from './helpers.js';
+import { jpegWithExif, testAuthConfig } from './helpers.js';
 import { testMongo } from './mongo.js';
 
 const silent = createLogger({ logLevel: 'silent', nodeEnv: 'test' });
 const many = { windowMs: 60_000, limit: 10_000 };
-const classification: ClassificationOutput = { category: 'roads', departmentRef: 'D1', priority: 'P2', certainty: 'HIGH', summary: 'Pothole near the bus stop.', rationale: 'Road surface damage.', missingInformation: [], reviewRecommended: false, reviewReasons: [] };
+const classification: ClassificationOutput = { category: 'roads', departmentRef: 'D1', priority: 'P2', certainty: 'HIGH', summary: 'Pothole near the bus stop.', rationale: 'Road surface damage.', missingInformation: [], reviewRecommended: false, reviewReasons: [], confidence: 0.92, publicSafetyHazard: false, spamLikely: false, followUpQuestions: [] };
 const provider: AiProvider = {
   name: 'fake',
   model: 'fake-1',
@@ -26,6 +26,9 @@ const provider: AiProvider = {
   },
   async assessImage() {
     return { output: { visualInconsistency: 'NONE_OBSERVED', inconsistencyNotes: '', relevance: 'APPEARS_RELATED', relevanceNotes: 'Road surface.' }, meta: { provider: 'fake', model: 'fake-1', promptVersion: 'v1', latencyMs: 1 } };
+  },
+  async compareResolution() {
+    return { output: { sameLocation: 'YES', issueAppearsFixed: 'YES', matchesCategory: 'YES', notes: 'Pothole filled; same kerb and pole.' }, meta: { provider: 'fake', model: 'fake-1', promptVersion: 'v1', latencyMs: 1 } };
   },
 };
 const storage = createMemoryStorage();
@@ -71,7 +74,8 @@ const ok = async (p: Promise<request.Response> | request.Test, status = 200) => 
   return res.body.data;
 };
 const register = async (name: string, email: string) => (await ok(api('post', '/auth/register', undefined, { name, email, password: `${name} long password` }), 201)).accessToken as string;
-const photo = () => Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.from(`JFIF${Math.random()}`), Buffer.alloc(500, 3)]);
+// Phone-style photo with GPS at the reported spot (used for every upload in this flow).
+const photo = () => jpegWithExif({ lat: 13.0072, lng: 74.7956 });
 const upload = (publicId: string, token: string, purpose: string, extra = '') =>
   request(app).post(`/api/v1/complaints/${publicId}/evidence?purpose=${purpose}${extra}`).set('Authorization', `Bearer ${token}`).set('Content-Type', 'image/jpeg').send(photo());
 

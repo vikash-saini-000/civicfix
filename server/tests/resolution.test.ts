@@ -2,7 +2,7 @@
 import mongoose from 'mongoose';
 import request from 'supertest';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { AiProviderError, type AiProvider, type ClassificationOutput, type ImageAssessment } from '../src/ai/types.js';
+import { AiProviderError, type AiProvider, type ClassificationOutput, type ImageAssessment, type ResolutionComparison, type ResolutionComparisonInput } from '../src/ai/types.js';
 import { createApp } from '../src/app.js';
 import { hashPassword } from '../src/auth/password.js';
 import { AIAnalysis, AuditLog, AuthSession, Complaint, Counter, Department, DepartmentMembership, Dispute, Evidence, Feedback, User, WorkOrder } from '../src/models/index.js';
@@ -10,7 +10,8 @@ import { createAnalysisService, type AnalysisService } from '../src/services/ana
 import { DEFAULT_VERIFICATION_POLICY, type VerificationPolicy } from '../src/services/resolution.js';
 import { assertSafeKey, createMemoryStorage, disabledStorage, type ObjectStorage } from '../src/storage/index.js';
 import { createLogger } from '../src/utils/logger.js';
-import { testAuthConfig } from './helpers.js';
+import { jpegWithExif, testAuthConfig } from './helpers.js';
+import { readCaptureMetadata } from '../src/services/analysis/exif.js';
 import { testMongo } from './mongo.js';
 
 const silent = createLogger({ logLevel: 'silent', nodeEnv: 'test' });
@@ -27,9 +28,20 @@ const good: ClassificationOutput = {
   missingInformation: [],
   reviewRecommended: false,
   reviewReasons: [],
+  confidence: 0.92,
+  publicSafetyHazard: false,
+  spamLikely: false,
+  followUpQuestions: [],
 };
-function provider(image: ImageAssessment | AiProviderError = clean): AiProvider {
+const fixed: ResolutionComparison = { sameLocation: 'YES', issueAppearsFixed: 'YES', matchesCategory: 'YES', notes: 'Pothole filled; same kerb and pole.' };
+type ComparisonScript = ResolutionComparison | AiProviderError | ((input: ResolutionComparisonInput) => ResolutionComparison);
+function provider(image: ImageAssessment | AiProviderError = clean, comparison: ComparisonScript = fixed): AiProvider {
   return {
+    async compareResolution(input) {
+      if (comparison instanceof AiProviderError) throw comparison;
+      const output = typeof comparison === 'function' ? comparison(input) : comparison;
+      return { output, meta: { provider: 'fake', model: 'fake-1', promptVersion: 'v1', latencyMs: 1 } };
+    },
     name: 'fake',
     model: 'fake-1',
     enabled: true,
@@ -58,9 +70,9 @@ afterAll(async () => {
 let analysis: AnalysisService;
 let app: ReturnType<typeof createApp>;
 let storage: ObjectStorage;
-function build(opts: { image?: ImageAssessment | AiProviderError; policy?: Partial<VerificationPolicy>; storage?: ObjectStorage } = {}) {
+function build(opts: { image?: ImageAssessment | AiProviderError; comparison?: ComparisonScript; policy?: Partial<VerificationPolicy>; storage?: ObjectStorage } = {}) {
   storage = opts.storage ?? createMemoryStorage();
-  analysis = createAnalysisService({ provider: provider(opts.image), logger: silent, maxAttempts: 1, autoRun: false, storage });
+  analysis = createAnalysisService({ provider: provider(opts.image, opts.comparison), logger: silent, maxAttempts: 1, autoRun: false, storage });
   app = createApp({
     config: { nodeEnv: 'test', corsOrigins: [], jsonBodyLimit: '100kb', auth: testAuthConfig },
     logger: silent,
@@ -121,9 +133,12 @@ const call = (method: 'get' | 'post', path: string, who?: Actor, body?: unknown)
 const upload = (publicId: string, who: Actor, purpose: string, bytes: Buffer = jpeg(), type = 'image/jpeg', extra = '') =>
   request(app).post(`/api/v1/complaints/${publicId}/evidence?purpose=${purpose}${extra}`).set('Authorization', `Bearer ${who.token}`).set('Content-Type', type).send(bytes);
 
+/** Where the latest inProgress() complaint was reported; resolution photos are taken here by default. */
+let site = { lat: 13.0, lng: 74.79 };
 /** Complaint filed by alice, auto-assigned to w1, accepted and started. */
 async function inProgress() {
-  const res = await call('post', '/complaints', alice, { title: 'Deep pothole near the bus stop', description: 'Large pothole on the service road near the stop.', location: { lat: 13.0, lng: 74.79 + Math.random() }, selectedCategory: 'roads' });
+  site = { lat: 13.0, lng: 74.79 + Math.round(Math.random() * 1e5) / 1e5 };
+  const res = await call('post', '/complaints', alice, { title: 'Deep pothole near the bus stop', description: 'Large pothole on the service road near the stop.', location: site, selectedCategory: 'roads' });
   const c = res.body.data.complaint as { publicId: string; id: string };
   await settle();
   const doc = (await WorkOrder.findOne({ complaint: c.id }).lean())!;
@@ -133,8 +148,8 @@ async function inProgress() {
   expect((await call('post', `/work-orders/${wo}/start`, worker, {})).status).toBe(200);
   return { c, wo };
 }
-async function submitWithEvidence(publicId: string, wo: string, analyse = true) {
-  const ev = await upload(publicId, worker, 'RESOLUTION');
+async function submitWithEvidence(publicId: string, wo: string, analyse = true, photo: Buffer = jpegWithExif(site)) {
+  const ev = await upload(publicId, worker, 'RESOLUTION', photo);
   expect(ev.status).toBe(201);
   if (analyse) await settle();
   return call('post', `/work-orders/${wo}/resolution`, worker, { completionNotes: 'Filled and compacted the pothole with asphalt.', evidenceIds: [ev.body.data.evidence.id] });
@@ -194,17 +209,34 @@ describe('evidence', () => {
 
   it('downloads only for people who can see the complaint, and audits it', async () => {
     const { c } = await inProgress();
-    const bytes = jpeg('download');
+    const bytes = jpegWithExif({ lat: 13.0072, lng: 74.7956, takenAt: '2026:10:24 09:00:00' });
     const id = (await upload(c.publicId, alice, 'ADDITIONAL', bytes)).body.data.evidence.id;
-    const ok = await call('get', `/evidence/${id}/content`, mgr).buffer(true).parse((res, cb) => {
-      const chunks: Buffer[] = [];
-      res.on('data', (d: Buffer) => chunks.push(d));
-      res.on('end', () => cb(null, Buffer.concat(chunks)));
-    });
+    const get = (who: Actor, variant = '') =>
+      call('get', `/evidence/${id}/content${variant}`, who).buffer(true).parse((res, cb) => {
+        const chunks: Buffer[] = [];
+        res.on('data', (d: Buffer) => chunks.push(d));
+        res.on('end', () => cb(null, Buffer.concat(chunks)));
+      });
+    // Until the privacy copy exists, only the uploader gets the file.
+    expect((await get(mgr)).status).toBe(409);
+    const own = await get(alice);
+    expect(own.status).toBe(200);
+    expect(own.headers['x-evidence-variant']).toBe('ORIGINAL');
+    expect(Buffer.compare(own.body as Buffer, bytes)).toBe(0);
+    await settle();
+    const ok = await get(mgr);
     expect(ok.status).toBe(200);
     expect(ok.headers['content-type']).toBe('image/jpeg');
     expect(ok.headers['cache-control']).toBe('private, no-store');
-    expect(Buffer.compare(ok.body as Buffer, bytes)).toBe(0);
+    expect(ok.headers['x-evidence-variant']).toBe('SHARED');
+    // The shared copy is a re-encoded image without metadata: no GPS or capture time left in it.
+    expect(Buffer.compare(ok.body as Buffer, bytes)).not.toBe(0);
+    expect(readCaptureMetadata(ok.body as Buffer)).toEqual({});
+    expect((await get(mgr, '?variant=original')).status).toBe(403);
+    const original = await get(admin, '?variant=original');
+    expect(original.headers['x-evidence-variant']).toBe('ORIGINAL');
+    expect(Buffer.compare(original.body as Buffer, bytes)).toBe(0);
+    expect(await AuditLog.exists({ action: 'evidence.original_downloaded', targetId: id, actor: admin.id })).toBeTruthy();
     expect((await call('get', `/evidence/${id}/content`, bob)).status).toBe(404);
     expect((await call('get', `/evidence/${id}/content`, otherMgr)).status).toBe(404);
     expect((await call('get', `/evidence/${new mongoose.Types.ObjectId()}/content`, alice)).status).toBe(404);
@@ -283,7 +315,7 @@ describe('resolution and verification', () => {
 
   it('rejects submission in the wrong state and handles concurrent submits', async () => {
     const { c, wo } = await inProgress();
-    const ev = (await upload(c.publicId, w1, 'RESOLUTION')).body.data.evidence.id;
+    const ev = (await upload(c.publicId, w1, 'RESOLUTION', jpegWithExif(site))).body.data.evidence.id;
     await settle();
     const body = { completionNotes: 'Filled and compacted the pothole.', evidenceIds: [ev] };
     const [a, b] = await Promise.all([call('post', `/work-orders/${wo}/resolution`, w1, body), call('post', `/work-orders/${wo}/resolution`, w1, body)]);
@@ -393,5 +425,110 @@ describe('disputes, closing and feedback', () => {
     const again = (await dispute(c.publicId, alice)).body.data.dispute;
     expect((await upload(c.publicId, alice, 'DISPUTE', jpeg(), 'image/jpeg', `&disputeId=${again.id}`)).status).toBe(201);
     expect((await upload(c.publicId, alice, 'DISPUTE', jpeg(), 'image/jpeg', `&disputeId=${d.id}`)).status).toBe(404);
+  });
+});
+
+// ---- verifier: GPS, capture time, before/after comparison -------------------------------------------
+describe('verifier checks (GPS, capture time, before/after comparison)', () => {
+  beforeEach(async () => {
+    build();
+    await seed();
+  });
+  const exifTime = (d: Date) => d.toISOString().slice(0, 19).replace('T', ' ').replace(/-/g, ':');
+
+  it('a photo with GPS at the spot, taken after assignment, showing the fix, is SUFFICIENT', async () => {
+    const { c, wo } = await inProgress();
+    const res = await submitWithEvidence(c.publicId, wo, true, jpegWithExif({ ...site, takenAt: exifTime(new Date()), offset: '+00:00' }));
+    expect(res.body.data.assessment.outcome).toBe('SUFFICIENT');
+  });
+
+  it('flags a photo taken far from the reported place, with the distance', async () => {
+    const { c, wo } = await inProgress();
+    const res = await submitWithEvidence(c.publicId, wo, true, jpegWithExif({ lat: site.lat + 0.001, lng: site.lng }));
+    expect(res.body.data.assessment).toMatchObject({ outcome: 'UNCERTAIN', reasons: [expect.stringMatching(/about 111 m from the reported location \(limit 50 m\)/)] });
+    expect(await statuses(c.id, wo)).toEqual(['VERIFICATION_REQUIRED', 'VERIFICATION_REQUIRED']);
+  });
+
+  it('a photo without GPS cannot confirm the location', async () => {
+    const { c, wo } = await inProgress();
+    const res = await submitWithEvidence(c.publicId, wo, true, jpeg());
+    expect(res.body.data.assessment).toMatchObject({ outcome: 'UNCERTAIN', reasons: ['The location of a resolution photo could not be confirmed (no GPS data in the file).'] });
+  });
+
+  it('flags a photo whose capture time is well before the assignment', async () => {
+    const { c, wo } = await inProgress();
+    const res = await submitWithEvidence(c.publicId, wo, true, jpegWithExif({ ...site, takenAt: '2024:01:01 10:00:00' }));
+    expect(res.body.data.assessment).toMatchObject({ outcome: 'UNCERTAIN', reasons: ['A resolution photo appears to have been taken before the work was assigned.'] });
+  });
+
+  it('before/after doubts make it UNCERTAIN, and auto-approval never overrides them', async () => {
+    const cases: [ResolutionComparison | AiProviderError, string][] = [
+      [{ ...fixed, issueAppearsFixed: 'NO' }, 'The before/after comparison suggests the problem is still visible.'],
+      [{ ...fixed, issueAppearsFixed: 'UNCLEAR' }, 'The before/after comparison could not confirm the fix.'],
+      [{ ...fixed, sameLocation: 'NO' }, 'The after photo may not show the same place as the report.'],
+      [{ ...fixed, matchesCategory: 'NO' }, 'The work shown does not seem to match the reported problem.'],
+      [new AiProviderError('UNAVAILABLE', 'down'), 'The before/after photo comparison could not be run for every file.'],
+    ];
+    for (const [comparison, reason] of cases) {
+      build({ comparison, policy: { autoApprove: true } });
+      await seed();
+      const { c, wo } = await inProgress();
+      const res = await submitWithEvidence(c.publicId, wo);
+      expect(res.body.data.assessment).toMatchObject({ outcome: 'UNCERTAIN', reasons: [reason] });
+      expect(await statuses(c.id, wo)).toEqual(['VERIFICATION_REQUIRED', 'VERIFICATION_REQUIRED']);
+    }
+  });
+
+  it("compares against the citizen's own photos and records the result for staff only", async () => {
+    let seen: ResolutionComparisonInput | undefined;
+    build({ comparison: (input) => ((seen = input), fixed) });
+    await seed();
+    const { c, wo } = await inProgress();
+    expect((await upload(c.publicId, alice, 'ADDITIONAL', jpegWithExif(site))).status).toBe(201);
+    await settle();
+    await submitWithEvidence(c.publicId, wo);
+    expect(seen).toMatchObject({ category: 'roads', complaintTitle: 'Deep pothole near the bus stop', after: { mediaType: 'image/jpeg' } });
+    expect(seen!.before).toHaveLength(1);
+
+    const media = (await call('get', `/complaints/${c.publicId}/analysis`, mgr)).body.data.analysis.media;
+    const resolutionEntry = media.find((m: { purpose: string }) => m.purpose === 'RESOLUTION');
+    expect(resolutionEntry.comparison).toEqual({ status: 'DONE', sameLocation: 'YES', issueAppearsFixed: 'YES', matchesCategory: 'YES', notes: fixed.notes, beforePhotos: 1 });
+    expect(media.find((m: { purpose: string }) => m.purpose === 'ADDITIONAL').comparison).toBeUndefined(); // citizen photos aren't compared
+    expect((await call('get', `/complaints/${c.publicId}/analysis`, alice)).status).toBe(403);
+  });
+
+  it('keeps a comparison request under the gateway size limit by sending fewer before photos', async () => {
+    let seen: ResolutionComparisonInput | undefined;
+    build({ comparison: (input) => ((seen = input), fixed) });
+    await seed();
+    const { c, wo } = await inProgress();
+    const big = () => Buffer.concat([jpegWithExif(site), Buffer.alloc(4 * 1024 * 1024, 0x33)]); // ~4 MB each
+    for (let i = 0; i < 2; i++) expect((await upload(c.publicId, alice, 'ADDITIONAL', big())).status).toBe(201);
+    await settle();
+    await submitWithEvidence(c.publicId, wo);
+    expect(seen!.before).toHaveLength(1); // 4 MB + small after-photo fits; a second 4 MB photo would not
+  });
+
+  it('stores photo GPS for checks but never shows it in evidence listings', async () => {
+    const { c } = await inProgress();
+    const res = await upload(c.publicId, alice, 'ADDITIONAL', jpegWithExif({ lat: 13.123456, lng: 74.654321, takenAt: '2026:10:20 09:15:00', offset: '+05:30' }));
+    const stored = await Evidence.findById(res.body.data.evidence.id).lean();
+    expect(stored!.captureLocation!.coordinates[1]).toBeCloseTo(13.123456, 5);
+    expect(stored!.capturedAt!.toISOString()).toBe('2026-10-20T03:45:00.000Z');
+    for (const who of [alice, mgr]) {
+      const listing = JSON.stringify((await call('get', `/complaints/${c.publicId}/evidence`, who)).body);
+      expect(listing).not.toMatch(/13\.1234|74\.6543|captureLocation|capturedAt/);
+    }
+  });
+
+  it('videos and oversized photos are recorded as not comparable (so verification stays with a human)', async () => {
+    const { c, wo } = await inProgress();
+    const mp4 = Buffer.concat([Buffer.from([0, 0, 0, 0x18]), Buffer.from('ftypmp42'), Buffer.alloc(400, 7)]);
+    const ev = await upload(c.publicId, worker, 'RESOLUTION', mp4, 'video/mp4');
+    expect(ev.status).toBe(201);
+    await settle();
+    expect(await AIAnalysis.findOne({ evidence: ev.body.data.evidence.id, analysisType: 'RESOLUTION_COMPARISON' }).lean()).toMatchObject({ status: 'FAILED', errorCode: 'NOT_COMPARABLE' });
+    const res = await call('post', `/work-orders/${wo}/resolution`, worker, { completionNotes: 'Video of the filled pothole.', evidenceIds: [ev.body.data.evidence.id] });
+    expect(res.body.data.assessment.outcome).toBe('UNCERTAIN');
   });
 });

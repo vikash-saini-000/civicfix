@@ -7,13 +7,17 @@ import {
   AUTHENTICITY_SIGNAL_SOURCES,
   CATEGORIES,
   CERTAINTY_LEVELS,
+  PLACE_KINDS,
   PRIORITIES,
+  PRIORITY_FACTORS,
   PROVENANCE_STATES,
+  REDACTION_REGION_KINDS,
   RELEVANCE_ASSESSMENTS,
   REVIEW_DECISIONS,
   REVIEW_REASONS,
   VERIFICATION_OUTCOMES,
 } from './enums.js';
+import { COMPARISON_ANSWERS } from './enums.js';
 
 // Everything here is model or rule output: untrusted, stored only after schema validation,
 // and never treated as a committed decision. Decisions live on Complaint / WorkOrder.
@@ -73,6 +77,28 @@ const relevanceSchema = new Schema(
   { _id: false },
 );
 
+/** One tool call made by the triage agent. Arguments and results are not stored. */
+const agentStepSchema = new Schema(
+  {
+    tool: { type: String, required: true, maxlength: 64, match: /^[a-z_]+$/ },
+    ok: { type: Boolean, required: true },
+    ms: { type: Number, min: 0 },
+  },
+  { _id: false },
+);
+
+/** Advisory before/after photo comparison. It can only make verification more cautious. */
+const comparisonSchema = new Schema(
+  {
+    sameLocation: { type: String, enum: COMPARISON_ANSWERS, required: true },
+    issueAppearsFixed: { type: String, enum: COMPARISON_ANSWERS, required: true },
+    matchesCategory: { type: String, enum: COMPARISON_ANSWERS, required: true },
+    notes: { type: String, trim: true, maxlength: 400 },
+    beforeCount: { type: Number, min: 0, required: true },
+  },
+  { _id: false },
+);
+
 const humanReviewSchema = new Schema(
   {
     decision: { type: String, enum: REVIEW_DECISIONS, required: true },
@@ -99,7 +125,7 @@ const aiAnalysisSchema = new Schema(
       ref: 'Evidence',
       immutable: true,
       required(this: { analysisType?: string }) {
-        return this.analysisType === 'MEDIA_AUTHENTICITY';
+        return this.analysisType === 'MEDIA_AUTHENTICITY' || this.analysisType === 'RESOLUTION_COMPARISON' || this.analysisType === 'PRIVACY_REDACTION';
       },
     },
     analysisType: { type: String, enum: ANALYSIS_TYPES, required: true, immutable: true },
@@ -138,6 +164,45 @@ const aiAnalysisSchema = new Schema(
     missingInformation: { type: [{ type: String, trim: true, maxlength: 200 }], default: [] },
     certainty: { type: String, enum: CERTAINTY_LEVELS },
     confidence, // reserved: only for a calibrated score from a documented source
+    // The model's own 0-1 estimate. NOT calibrated; used only as one routing threshold (below 0.7 = human).
+    selfReportedConfidence: confidence,
+    // Model's own priority before the explainable rules (suggestedPriority is after them).
+    modelPriority: { type: String, enum: PRIORITIES },
+    priorityFactors: {
+      type: [
+        new Schema(
+          { factor: { type: String, enum: PRIORITY_FACTORS, required: true }, detail: { type: String, trim: true, maxlength: 200 }, raisedTo: { type: String, enum: PRIORITIES } },
+          { _id: false },
+        ),
+      ],
+      default: [],
+    },
+    publicSafetyHazard: { type: Boolean },
+    spamLikely: { type: Boolean },
+    followUpQuestions: { type: [{ type: String, trim: true, maxlength: 200 }], default: [] },
+    // Location facts given to the model (no personal data): ward, nearby sensitive places, report counts.
+    locationContext: {
+      type: new Schema(
+        {
+          ward: { type: String, trim: true, maxlength: 100 },
+          nearbyPlaces: {
+            type: [new Schema({ name: { type: String, maxlength: 120 }, kind: { type: String, enum: PLACE_KINDS }, distanceMeters: { type: Number, min: 0 } }, { _id: false })],
+            default: [],
+          },
+          openReportsNearby: { type: Number, min: 0 },
+          linkedReports: { type: Number, min: 0 },
+        },
+        { _id: false },
+      ),
+    },
+
+    // ---- TRIAGE, agent mode only ----
+    // Staff member and possible duplicate proposed by the agent. Rules re-check both before any use.
+    suggestedAssignee: { type: Schema.Types.ObjectId, ref: 'User' },
+    likelyDuplicate: { type: Schema.Types.ObjectId, ref: 'Complaint' },
+    agentTrace: {
+      type: new Schema({ turns: { type: Number, min: 0, required: true }, steps: { type: [agentStepSchema], default: [] } }, { _id: false }),
+    },
 
     // ---- DUPLICATE_CANDIDATES ----
     duplicateCandidates: { type: [duplicateCandidateSchema], default: [] },
@@ -147,6 +212,33 @@ const aiAnalysisSchema = new Schema(
 
     // ---- RESOLUTION_VERIFICATION (Phase 9) ----
     verification: { type: verificationSchema },
+
+    // ---- RESOLUTION_COMPARISON ----
+    comparison: { type: comparisonSchema },
+
+    // ---- PRIVACY_REDACTION ----
+    redaction: {
+      type: new Schema(
+        {
+          regions: {
+            type: [
+              new Schema(
+                {
+                  kind: { type: String, enum: REDACTION_REGION_KINDS, required: true },
+                  x: { ...confidence, required: true },
+                  y: { ...confidence, required: true },
+                  width: { ...confidence, required: true },
+                  height: { ...confidence, required: true },
+                },
+                { _id: false },
+              ),
+            ],
+            default: [],
+          },
+        },
+        { _id: false },
+      ),
+    },
 
     // ---- MEDIA_AUTHENTICITY ----
     authenticity: { type: authenticitySchema },

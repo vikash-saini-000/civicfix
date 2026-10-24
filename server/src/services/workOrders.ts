@@ -10,6 +10,11 @@ import type { Logger } from '../utils/logger.js';
 import { paginationMeta, toSkipLimit, type PaginationMeta, type PaginationQuery } from '../validation/pagination.js';
 import { auditUserAction, type AuditChange } from './audit.js';
 import type { ComplaintService } from './complaints.js';
+import { availableMembers, DEFAULT_MAX_OPEN_PER_MEMBER } from './staffCapacity.js';
+import { MIN_ROUTING_CONFIDENCE } from './analysis/runner.js';
+import { DEFAULT_SPAM_POLICY } from './spam.js';
+
+const SPAM_FLAG_SCORE = DEFAULT_SPAM_POLICY.flagAt;
 
 // ---- policy ---------------------------------------------------------------------------
 
@@ -26,7 +31,7 @@ export interface AssignmentPolicy {
 export const DEFAULT_ASSIGNMENT_POLICY: AssignmentPolicy = {
   version: 'assign-v1',
   autoAssignEnabled: true,
-  maxOpenWorkOrdersPerMember: 10,
+  maxOpenWorkOrdersPerMember: DEFAULT_MAX_OPEN_PER_MEMBER,
   dueHoursByPriority: { P1: 24, P2: 72, P3: 168, P4: 336 },
 };
 
@@ -139,19 +144,7 @@ export function createWorkOrderService(deps: WorkOrderServiceDeps) {
    * maxOpenWorkOrdersPerMember open work orders; fewest open work first, then longest-standing membership.
    */
   async function pickAssignee(departmentId: Types.ObjectId): Promise<Types.ObjectId | null> {
-    const memberships = await DepartmentMembership.find({ department: departmentId, status: 'ACTIVE', role: 'MEMBER' }).sort({ createdAt: 1, _id: 1 }).select('user').limit(200).lean();
-    if (memberships.length === 0) return null;
-    const active = new Set((await User.find({ _id: { $in: memberships.map((m) => m.user) }, accountStatus: 'ACTIVE' }).select('_id').lean()).map((u) => String(u._id)));
-    const loads = await WorkOrder.aggregate<{ _id: Types.ObjectId; n: number }>([
-      { $match: { assignee: { $in: memberships.map((m) => m.user) }, status: { $in: OPEN_WORK_ORDER_STATUSES } } },
-      { $group: { _id: '$assignee', n: { $sum: 1 } } },
-    ]);
-    const load = new Map(loads.map((l) => [String(l._id), l.n]));
-    const candidates = memberships
-      .filter((m) => active.has(String(m.user)) && (load.get(String(m.user)) ?? 0) < policy.maxOpenWorkOrdersPerMember)
-      .map((m, order) => ({ user: m.user, n: load.get(String(m.user)) ?? 0, order }))
-      .sort((a, b) => a.n - b.n || a.order - b.order);
-    return candidates[0]?.user ?? null;
+    return (await availableMembers(departmentId, policy.maxOpenWorkOrdersPerMember))[0]?.user ?? null;
   }
 
   /** Moves the complaint to mirror a work-order change. Returns false if the complaint wasn't in the expected state. */
@@ -428,6 +421,7 @@ export function createWorkOrderService(deps: WorkOrderServiceDeps) {
       const complaint = await Complaint.findById(complaintId).lean();
       if (!complaint || !['REPORTED', 'UNDER_REVIEW'].includes(complaint.status)) return { outcome: 'SKIPPED' };
       if (complaint.department) return { outcome: 'SKIPPED' }; // already routed by a human; the manager decides
+      if (complaint.duplicateOf) return { outcome: 'SKIPPED' }; // handled through the original report
       if (await WorkOrder.exists({ activeFor: complaint._id })) return { outcome: 'SKIPPED' };
 
       const [triage, dup] = await Promise.all([
@@ -444,31 +438,52 @@ export function createWorkOrderService(deps: WorkOrderServiceDeps) {
       } else {
         for (const f of triage.reviewFlags ?? []) reasons.add(f);
         if (triage.certainty !== 'HIGH') reasons.add('LOW_CONFIDENCE');
+        if (typeof triage.selfReportedConfidence === 'number' && triage.selfReportedConfidence < MIN_ROUTING_CONFIDENCE) reasons.add('LOW_CONFIDENCE');
+        if (triage.publicSafetyHazard) reasons.add('PUBLIC_SAFETY_HAZARD');
+        if (triage.spamLikely) reasons.add('SPAM_SUSPECTED');
         if (triage.reviewRecommended && reasons.size === 0) reasons.add('POLICY_REQUIRES_APPROVAL');
         if (triage.suggestedPriority === 'P1') reasons.add('HIGH_URGENCY');
         if (complaint.selectedCategory && complaint.selectedCategory !== triage.suggestedCategory) reasons.add('CATEGORY_CONFLICT');
-        // The data-driven mapping: exactly one active department must handle the category, and it must be the suggested one.
-        const handlers = await Department.find({ isActive: true, categories: triage.suggestedCategory }).select('_id').limit(2).lean();
+        // The data-driven mapping: exactly one active department must handle the category AND serve the
+        // complaint's ward (departments with no wards serve the whole city), and it must be the suggested one.
+        const handlers = await Department.find({ isActive: true, categories: triage.suggestedCategory, $or: [{ wards: { $size: 0 } }, ...(complaint.ward ? [{ wards: complaint.ward }] : [])] })
+          .select('_id')
+          .limit(2)
+          .lean();
         if (handlers.length === 0) reasons.add('UNCLEAR_DEPARTMENT');
         else if (handlers.length > 1) reasons.add('MULTI_DEPARTMENT');
         else if (!triage.suggestedDepartment || !handlers[0]!._id.equals(triage.suggestedDepartment)) reasons.add('UNCLEAR_DEPARTMENT');
         else department = handlers[0]!;
       }
       if (!dup || dup.status !== 'SUCCEEDED' || (dup.duplicateCandidates ?? []).length > 0) reasons.add('AMBIGUOUS_DUPLICATE');
+      if ((complaint.spamCheck?.score ?? 0) >= SPAM_FLAG_SCORE) reasons.add('SPAM_SUSPECTED');
+      if (complaint.followUp && !complaint.followUp.answeredAt && (reasons.has('LOW_CONFIDENCE') || reasons.has('UNCLEAR_DEPARTMENT'))) reasons.add('AWAITING_CITIZEN_INFO');
 
       if (reasons.size > 0 || !department || !triage) {
         const list = [...reasons];
+        // The AI's suggested department (if it still serves this location) gets the case in its managers' queue.
+        const suggested =
+          triage?.suggestedDepartment &&
+          (await Department.exists({ _id: triage.suggestedDepartment, isActive: true, $or: [{ wards: { $size: 0 } }, ...(complaint.ward ? [{ wards: complaint.ward }] : [])] }))
+            ? triage.suggestedDepartment
+            : undefined;
         const updated = await Complaint.updateOne(
           { _id: complaint._id, status: { $in: ['REPORTED', 'UNDER_REVIEW'] }, department: null },
-          { $set: { routingReview: { reasons: list, evaluatedAt: new Date(), policyVersion: policy.version } } },
+          { $set: { routingReview: { reasons: list, suggestedDepartment: suggested, evaluatedAt: new Date(), policyVersion: policy.version } } },
         );
         if (updated.modifiedCount === 1) {
           await audit({ system: true }, 'assignment.review_required', 'Complaint', complaint._id, { reason: list.join(', ') });
-          await events.emit('assignment.review_required', { complaintId: String(complaint._id), departmentId: null, reasons: list }, `${complaint._id}:review:${triage?._id ?? 'none'}:${dup?._id ?? 'none'}`);
+          await events.emit('assignment.review_required', { complaintId: String(complaint._id), departmentId: suggested ? String(suggested) : null, reasons: list }, `${complaint._id}:review:${triage?._id ?? 'none'}:${dup?._id ?? 'none'}`);
         }
         return { outcome: 'REVIEW', reasons: list };
       }
 
+      // An assignee proposed by the triage agent is used only if they still pass the capacity rules now.
+      let proposed: Types.ObjectId | null = null;
+      if (triage.suggestedAssignee) {
+        const available = await availableMembers(department._id, policy.maxOpenWorkOrdersPerMember);
+        proposed = available.find((m) => m.user.equals(triage.suggestedAssignee!))?.user ?? null;
+      }
       try {
         await createWorkOrder({
           complaintId: complaint._id,
@@ -477,7 +492,8 @@ export function createWorkOrderService(deps: WorkOrderServiceDeps) {
           category: triage.suggestedCategory as Category,
           source: 'AUTO',
           actor: { system: true },
-          reason: `Automatic routing (${policy.version}): high-certainty classification, single responsible department, no duplicates.`,
+          reason: `Automatic routing (${policy.version}): high-certainty classification, single department serving this location, no duplicates or safety flags${proposed ? '; assignee proposed by the triage agent and confirmed by capacity rules' : ''}.`,
+          assigneeId: proposed,
           autoPick: true,
         });
       } catch (err) {
@@ -495,8 +511,11 @@ export function createWorkOrderService(deps: WorkOrderServiceDeps) {
       if (!complaint) throw notFoundError('The complaint');
       const admin = isAdmin(p);
       if (!admin) {
-        if (relation !== 'staff' || !currentDept || !isManagerOf(p, currentDept)) throw new AppError('FORBIDDEN', 'Only platform administrators or this department’s managers can assign this complaint.');
-        if (input.departmentId !== currentDept) throw new AppError('FORBIDDEN', 'Managers can only assign within their own department. Ask an administrator to move it.');
+        // A manager decides for their own department: the complaint is routed there, or (still unrouted)
+        // the AI suggested their department when it sent the case to review.
+        const routedDept = currentDept ?? (complaint.routingReview?.suggestedDepartment ? String(complaint.routingReview.suggestedDepartment) : null);
+        if (!routedDept || !isManagerOf(p, routedDept) || (relation !== 'staff' && currentDept)) throw new AppError('FORBIDDEN', 'Only platform administrators or this department’s managers can assign this complaint.');
+        if (input.departmentId !== routedDept) throw new AppError('FORBIDDEN', 'Managers can only assign within their own department. Ask an administrator to move it.');
       }
       if (!['REPORTED', 'UNDER_REVIEW'].includes(complaint.status)) throw new AppError('CONFLICT', `A complaint that is ${complaint.status} can't be assigned.`);
       const category = (input.category ?? complaint.confirmedCategory ?? complaint.selectedCategory) as Category | undefined;
@@ -525,12 +544,20 @@ export function createWorkOrderService(deps: WorkOrderServiceDeps) {
       const managed = p.memberships.filter((m) => m.role === 'MANAGER').map((m) => new Types.ObjectId(m.departmentId));
       let scope: Record<string, unknown>;
       if (isAdmin(p)) scope = {};
-      else if (managed.length > 0) scope = { department: { $in: managed } };
+      else if (managed.length > 0) scope = { $or: [{ department: { $in: managed } }, { department: null, 'routingReview.suggestedDepartment': { $in: managed } }] };
       else throw new AppError('FORBIDDEN', 'Only managers and platform administrators have a review queue.');
-      const filter: Record<string, unknown> = { ...scope, status: { $in: ['REPORTED', 'UNDER_REVIEW'] } };
+      // Linked duplicates follow their original report and need no routing decision.
+      const filter: Record<string, unknown> = { ...scope, status: { $in: ['REPORTED', 'UNDER_REVIEW'] }, duplicateOf: null };
       const { skip, limit } = toSkipLimit(q);
       const [rawDocs, total] = await Promise.all([
-        Complaint.find(filter).sort({ createdAt: 1, _id: 1 }).skip(skip).limit(limit).select('publicId title status selectedCategory confirmedCategory priority department routingReview createdAt').populate('department', 'name').lean(),
+        Complaint.find(filter)
+          .sort({ createdAt: 1, _id: 1 })
+          .skip(skip)
+          .limit(limit)
+          .select('publicId title status selectedCategory confirmedCategory priority department routingReview followUp spamCheck linkedReportCount createdAt')
+          .populate('department', 'name')
+          .populate('routingReview.suggestedDepartment', 'name')
+          .lean(),
         Complaint.countDocuments(filter),
       ]);
       type QueueDoc = {
@@ -541,8 +568,15 @@ export function createWorkOrderService(deps: WorkOrderServiceDeps) {
         confirmedCategory?: string | null;
         priority?: string | null;
         department?: unknown;
-        routingReview?: { reasons: string[]; evaluatedAt: Date } | null;
+        routingReview?: { reasons: string[]; evaluatedAt: Date; suggestedDepartment?: unknown } | null;
+        followUp?: { answeredAt?: Date | null } | null;
+        spamCheck?: { score: number } | null;
+        linkedReportCount?: number | null;
         createdAt?: Date;
+      };
+      const deptRef = (d: unknown) => {
+        const x = d as { _id?: unknown; name?: string } | null | undefined;
+        return x && typeof x === 'object' && x.name ? { id: String(x._id), name: x.name } : null;
       };
       const docs = rawDocs as unknown as QueueDoc[];
       const items = docs.map((c) => ({
@@ -556,6 +590,10 @@ export function createWorkOrderService(deps: WorkOrderServiceDeps) {
           return d && typeof d === 'object' && d.name ? { id: String(d._id), name: d.name } : null;
         })(),
         reviewReasons: c.routingReview?.reasons ?? [],
+        suggestedDepartment: deptRef(c.routingReview?.suggestedDepartment),
+        awaitingCitizen: !!c.followUp && !c.followUp.answeredAt,
+        spamScore: c.spamCheck?.score ?? 0,
+        linkedReportCount: c.linkedReportCount ?? 0,
         evaluatedAt: c.routingReview?.evaluatedAt?.toISOString() ?? null,
         createdAt: c.createdAt!.toISOString(),
       }));

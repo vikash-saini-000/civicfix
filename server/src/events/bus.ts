@@ -16,6 +16,9 @@ export interface DomainEvents {
   'resolution.decided': { workOrderId: string; complaintId: string; decision: string };
   'dispute.created': { disputeId: string; complaintId: string };
   'dispute.decided': { disputeId: string; complaintId: string; decision: string };
+  'complaint.follow_up_requested': { complaintId: string; count: number };
+  'complaint.duplicate_linked': { complaintId: string; canonicalId: string };
+  'work_order.overdue': { workOrderId: string; complaintId: string; departmentId: string; assigneeId: string | null; dueAt: string };
 }
 
 export type EventName = keyof DomainEvents;

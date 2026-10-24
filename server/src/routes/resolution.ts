@@ -70,6 +70,7 @@ const feedbackBody = z.strictObject({
 const csv = <T extends readonly [string, ...string[]]>(v: T) => z.string().max(200).transform((s) => s.split(',')).pipe(z.array(z.enum(v)).min(1));
 const disputeList = paginationQuery.extend({ scope: z.enum(['mine', 'department', 'all']).default('mine'), status: csv(DISPUTE_STATUSES).optional() });
 const empty = z.strictObject({});
+const downloadQuery = z.strictObject({ variant: z.enum(['auto', 'shared', 'original']).default('auto') });
 
 /** Evidence reads, resolution, verification, disputes, closing and feedback (JSON bodies). */
 export function resolutionRouter(deps: { authService: AuthService; evidenceService: EvidenceService; resolutionService: ResolutionService }): Router {
@@ -84,9 +85,10 @@ export function resolutionRouter(deps: { authService: AuthService; evidenceServi
     sendSuccess(res, await ev.list(req.auth!, input<CP>(req, 'params').publicId));
   });
 
-  router.get('/evidence/:id/content', auth, validate({ params: idParams }), async (req, res) => {
-    const file = await ev.download(req.auth!, input<IP>(req, 'params').id, req.id);
+  router.get('/evidence/:id/content', auth, validate({ params: idParams, query: downloadQuery }), async (req, res) => {
+    const file = await ev.download(req.auth!, input<IP>(req, 'params').id, req.id, input<z.infer<typeof downloadQuery>>(req, 'query').variant);
     res.setHeader('Cache-Control', 'private, no-store');
+    res.setHeader('X-Evidence-Variant', file.variant);
     res.setHeader('Content-Disposition', `attachment; filename="${file.filename}"`);
     res.type(file.contentType).send(file.bytes);
   });

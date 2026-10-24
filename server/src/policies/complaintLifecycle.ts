@@ -25,6 +25,8 @@ export const COMPLAINT_TRANSITIONS = [
   { action: 'reject_resolution', from: ['RESOLUTION_SUBMITTED', 'VERIFICATION_REQUIRED'], to: 'IN_PROGRESS', phase: 9 },
   { action: 'close', from: ['RESOLVED'], to: 'CLOSED', phase: 9 },
   { action: 'reopen', from: ['RESOLVED'], to: 'IN_PROGRESS', phase: 9 },
+  // Linked duplicates still waiting in triage close together with their original report (system only).
+  { action: 'close_with_original', from: ['REPORTED', 'UNDER_REVIEW'], to: 'CLOSED', phase: 9 },
 ] as const satisfies readonly { action: string; from: readonly ComplaintStatus[]; to: ComplaintStatus; phase: number }[];
 
 export type ComplaintAction = (typeof COMPLAINT_TRANSITIONS)[number]['action'];

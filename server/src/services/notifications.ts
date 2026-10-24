@@ -90,6 +90,51 @@ export function createNotificationService() {
         if (!c) return;
         // Only the citizen-facing note, never internal work notes.
         await deliver(eventId, [c.citizen], { type: 'COMPLAINT_STATUS_CHANGED', title: `${c.publicId} is ${STATUS_LABEL[to] ?? to.toLowerCase()}`, message: (note ?? '').slice(0, 1000) || `Your complaint is now ${STATUS_LABEL[to] ?? to}.`, complaint: c._id });
+        // People whose reports were linked to this one follow its progress too (each on their own report).
+        const linked = await Complaint.find({ 'duplicateOf.complaint': c._id }).select('citizen publicId').limit(200).lean();
+        for (const d of linked) {
+          await deliver(`${eventId}|dup:${d._id}`, [d.citizen], {
+            type: 'COMPLAINT_STATUS_CHANGED',
+            title: `${d.publicId}: the linked report is ${STATUS_LABEL[to] ?? to.toLowerCase()}`,
+            message: `Your report is linked to ${c.publicId}, which is now ${STATUS_LABEL[to] ?? to.toLowerCase()}.`,
+            complaint: d._id,
+          });
+        }
+      });
+
+      events.on('complaint.follow_up_requested', async ({ complaintId, count }, { eventId }) => {
+        const c = await Complaint.findById(complaintId).select('citizen publicId').lean();
+        if (!c) return;
+        await deliver(eventId, [c.citizen], {
+          type: 'FOLLOW_UP_REQUESTED',
+          title: `${c.publicId}: ${count === 1 ? 'one quick question' : `${count} quick questions`}`,
+          message: 'A few details would help us send the right team. Open your complaint to answer.',
+          complaint: c._id,
+        });
+      });
+
+      events.on('complaint.duplicate_linked', async ({ complaintId, canonicalId }, { eventId }) => {
+        const [c, canonical] = await Promise.all([Complaint.findById(complaintId).select('citizen publicId').lean(), Complaint.findById(canonicalId).select('publicId status').lean()]);
+        if (!c || !canonical) return;
+        await deliver(eventId, [c.citizen], {
+          type: 'DUPLICATE_LINKED',
+          title: `${c.publicId} is linked to ${canonical.publicId}`,
+          message: `Someone already reported this problem. Your report now counts towards ${canonical.publicId} (currently ${STATUS_LABEL[canonical.status] ?? canonical.status.toLowerCase()}), and you'll get its updates.`,
+          complaint: c._id,
+        });
+      });
+
+      events.on('work_order.overdue', async ({ workOrderId, departmentId, assigneeId }, { eventId }) => {
+        const wo = await WorkOrder.findById(workOrderId).select('publicId priority complaint dueAt').lean();
+        if (!wo) return;
+        const recipients = [...(await managersOf(departmentId)), ...(assigneeId ? [assigneeId] : [])];
+        await deliver(eventId, recipients, {
+          type: 'WORK_ORDER_OVERDUE',
+          title: `${wo.publicId} (${wo.priority}) is past its target time`,
+          message: `It was due ${wo.dueAt?.toISOString().slice(0, 16).replace('T', ' ') ?? 'earlier'} UTC. Please update the work order or record a blocker.`,
+          workOrder: wo._id,
+          complaint: wo.complaint,
+        });
       });
 
       events.on('assignment.review_required', async ({ complaintId, departmentId, reasons }, { eventId }) => {

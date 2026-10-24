@@ -2,6 +2,9 @@
 import { existsSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { createAnthropicProvider } from './ai/anthropicProvider.js';
+import { createOpenAiCompatibleEmbeddings, disabledEmbeddings } from './ai/embeddings.js';
+import { createEventBus } from './events/bus.js';
+import { createSlaMonitor } from './services/slaMonitor.js';
 import { disabledProvider } from './ai/types.js';
 import { createApp } from './app.js';
 import { connectDatabase, disconnectDatabase, isDatabaseConnected, pingDatabase, safeError } from './config/database.js';
@@ -46,11 +49,28 @@ async function main() {
   // AI analysis runs in the background; with AI_PROVIDER=disabled only the rule-based duplicate check runs.
   const provider = config.ai.provider === 'anthropic' ? createAnthropicProvider(config.ai) : disabledProvider;
   const storage = config.storage.provider === 'local' ? createLocalStorage(config.storage.localDir) : disabledStorage;
-  const analysis = createAnalysisService({ provider, logger, maxAttempts: config.ai.maxAttempts, autoRun: true, storage });
-  logger.info({ aiProvider: provider.name, aiModel: provider.enabled ? provider.model : undefined, storage: config.storage.provider }, 'analysis configured');
+  const embeddings =
+    config.ai.embeddingModel && config.ai.baseURL && config.ai.apiKey
+      ? createOpenAiCompatibleEmbeddings({ baseURL: config.ai.baseURL, apiKey: config.ai.apiKey, model: config.ai.embeddingModel, timeoutMs: config.ai.timeoutMs })
+      : disabledEmbeddings;
+  const events = createEventBus(logger);
+  const sla = createSlaMonitor({ events, logger });
+  const analysis = createAnalysisService({
+    embeddings,
+    provider,
+    logger,
+    maxAttempts: config.ai.maxAttempts,
+    autoRun: true,
+    storage,
+    triageMode: config.ai.triageMode,
+    agentMaxTurns: config.ai.agentMaxTurns,
+    callTimeoutMs: config.ai.timeoutMs,
+  });
+  logger.info({ aiProvider: provider.name, aiGateway: provider.enabled ? (config.ai.baseURL ? 'aicredits' : 'anthropic') : undefined, aiModel: provider.enabled ? provider.model : undefined, aiTriageMode: provider.enabled ? config.ai.triageMode : undefined, embeddings: embeddings.enabled ? embeddings.model : 'disabled', storage: config.storage.provider }, 'analysis configured');
 
   const app = createApp({
     analysis,
+    events,
     storage,
     verificationPolicy: { ...DEFAULT_VERIFICATION_POLICY, autoApprove: config.verification.autoApprove, disputeWindowDays: config.verification.disputeWindowDays },
     config,
@@ -71,6 +91,7 @@ async function main() {
     timeoutMs: config.shutdownTimeoutMs,
     // Stop taking new jobs and let running ones settle before the database closes.
     onClose: async () => {
+      await sla.stop();
       await analysis.runner.stop();
       await disconnectDatabase();
     },
@@ -96,6 +117,7 @@ async function main() {
   server.listen(config.port, config.host, () => {
     logger.info({ port: config.port }, 'server listening');
     analysis.runner.start();
+    sla.start();
   });
 }
 

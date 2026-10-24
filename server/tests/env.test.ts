@@ -28,7 +28,7 @@ describe('loadConfig', () => {
       dbServerSelectionTimeoutMs: 10_000,
       trustProxyHops: 0,
       auth: { jwtSecret: JWT, accessTokenTtlSeconds: 900, refreshTokenTtlDays: 7, cookieSecure: false, cookieSameSite: 'lax' },
-      ai: { provider: 'disabled', apiKey: undefined, model: 'claude-opus-5-5', timeoutMs: 30_000, maxAttempts: 3 },
+      ai: { provider: 'disabled', apiKey: undefined, model: 'claude-opus-5-5', timeoutMs: 30_000, maxAttempts: 3, triageMode: 'single', agentMaxTurns: 6, embeddingModel: null },
       storage: { provider: 'disabled', localDir: './uploads' },
       verification: { autoApprove: false, disputeWindowDays: 14 },
     });
@@ -103,10 +103,79 @@ describe('auth config', () => {
 describe('ai config', () => {
   it('is disabled by default and needs a key when enabled', () => {
     expect(loadConfig(base).ai.provider).toBe('disabled');
-    expect(issuesFor({ ...base, AI_PROVIDER: 'anthropic' })).toEqual(['ANTHROPIC_API_KEY is required when AI_PROVIDER=anthropic']);
-    expect(loadConfig({ ...base, AI_PROVIDER: 'anthropic', ANTHROPIC_API_KEY: 'sk-test' }).ai).toMatchObject({ provider: 'anthropic', model: 'claude-opus-5-5' });
+    expect(issuesFor({ ...base, AI_PROVIDER: 'anthropic' })).toEqual(['ANTHROPIC_API_KEY or AICREDITS_API_KEY is required when AI_PROVIDER=anthropic']);
+    const direct = loadConfig({ ...base, AI_PROVIDER: 'anthropic', ANTHROPIC_API_KEY: 'sk-test' }).ai;
+    expect(direct).toMatchObject({ provider: 'anthropic', apiKey: 'sk-test', model: 'claude-opus-5-5' });
+    expect(direct.baseURL).toBeUndefined();
     expect(issuesFor({ ...base, AI_PROVIDER: 'openai' })).toHaveLength(1);
     expect(issuesFor({ ...base, AI_MAX_ATTEMPTS: '9' })).toHaveLength(1);
+  });
+
+  it('keeps the single-call triage by default and validates agent settings', () => {
+    expect(loadConfig({ ...base, AI_TRIAGE_MODE: 'agent', AI_AGENT_MAX_TURNS: '4' }).ai).toMatchObject({ triageMode: 'agent', agentMaxTurns: 4 });
+    expect(issuesFor({ ...base, AI_TRIAGE_MODE: 'autonomous' })).toEqual(['AI_TRIAGE_MODE must be one of single, agent']);
+    expect(issuesFor({ ...base, AI_AGENT_MAX_TURNS: '50' })).toHaveLength(1);
+    expect(issuesFor({ ...base, AI_AGENT_MAX_TURNS: '1' })).toHaveLength(1);
+  });
+
+  describe('AiCredits.in gateway', () => {
+    const KEY = 'sk-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
+    const gw = { ...base, AI_PROVIDER: 'anthropic', AICREDITS_API_KEY: KEY };
+
+    it('uses the AiCredits key and fixed base URL, keeping AI_PROVIDER=anthropic', () => {
+      expect(loadConfig({ ...gw, AI_MODEL: 'anthropic/claude-sonnet-4.6' }).ai).toEqual({
+        provider: 'anthropic',
+        apiKey: KEY,
+        baseURL: 'https://api.aicredits.in',
+        model: 'anthropic/claude-sonnet-4.6',
+        timeoutMs: 30_000,
+        maxAttempts: 3,
+        triageMode: 'single',
+        agentMaxTurns: 6,
+        embeddingModel: 'text-embedding-3-small',
+      });
+    });
+
+    it('turns semantic duplicate search on by default through AiCredits, and allows switching it off', () => {
+      expect(loadConfig({ ...gw, AI_MODEL: 'anthropic/claude-sonnet-4.6', EMBEDDING_MODEL: 'disabled' }).ai.embeddingModel).toBeNull();
+      expect(loadConfig({ ...gw, AI_MODEL: 'anthropic/claude-sonnet-4.6', EMBEDDING_MODEL: 'text-embedding-3-large' }).ai.embeddingModel).toBe('text-embedding-3-large');
+      expect(issuesFor({ ...gw, AI_MODEL: 'anthropic/claude-sonnet-4.6', EMBEDDING_MODEL: 'bad model!' })).toEqual([expect.stringMatching(/^EMBEDDING_MODEL must be/)]);
+    });
+
+    it('requires an explicit AI_MODEL instead of silently using the direct-API default', () => {
+      expect(issuesFor(gw)).toEqual([expect.stringMatching(/^AI_MODEL is required with AICREDITS_API_KEY/)]);
+    });
+
+    it('refuses both keys at once so the billed account is never ambiguous', () => {
+      expect(issuesFor({ ...gw, AI_MODEL: 'anthropic/claude-sonnet-4.6', ANTHROPIC_API_KEY: 'sk-ant-x' })).toEqual([
+        'Set only one of ANTHROPIC_API_KEY or AICREDITS_API_KEY',
+      ]);
+    });
+
+    it('ignores the key while AI is disabled', () => {
+      const ai = loadConfig({ ...base, AICREDITS_API_KEY: KEY }).ai;
+      expect(ai).toMatchObject({ provider: 'disabled' });
+      expect(ai.apiKey).toBeUndefined();
+      expect(ai.baseURL).toBeUndefined();
+    });
+
+    it('accepts vendor-prefixed model IDs but still rejects junk', () => {
+      expect(issuesFor({ ...gw, AI_MODEL: 'anthropic/claude-haiku-4.5' })).toEqual([]);
+      for (const bad of ['anthropic/', '/claude-x', 'a/b/claude-x', 'Anthropic/Claude', 'claude x', 'https://evil/x']) {
+        expect(issuesFor({ ...gw, AI_MODEL: bad })).toHaveLength(1);
+      }
+    });
+
+    it('never echoes the key in configuration errors', () => {
+      try {
+        loadConfig({ ...gw, ANTHROPIC_API_KEY: 'sk-ant-other' });
+        throw new Error('expected ConfigError');
+      } catch (err) {
+        expect(err).toBeInstanceOf(ConfigError);
+        expect((err as Error).message).not.toContain(KEY);
+        expect((err as Error).message).not.toContain('sk-ant-other');
+      }
+    });
   });
 });
 

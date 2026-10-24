@@ -27,6 +27,10 @@ const good = (o: Partial<ClassificationOutput> = {}): ClassificationOutput => ({
   missingInformation: [],
   reviewRecommended: false,
   reviewReasons: [],
+  confidence: 0.92,
+  publicSafetyHazard: false,
+  spamLikely: false,
+  followUpQuestions: [],
   ...o,
 });
 function provider(out: ClassificationOutput | AiProviderError): AiProvider {
@@ -251,8 +255,10 @@ describe('manual assignment', () => {
     const c = await file();
     await settle();
     const q = await call('get', '/assignments/queue', admin);
-    expect(q.body.data).toEqual([expect.objectContaining({ publicId: c.publicId, reviewReasons: expect.arrayContaining(['LOW_CONFIDENCE']), department: null })]);
-    expect((await call('get', '/assignments/queue', roadsMgr)).body.data).toEqual([]); // not routed to roads yet
+    expect(q.body.data).toEqual([expect.objectContaining({ publicId: c.publicId, reviewReasons: expect.arrayContaining(['LOW_CONFIDENCE']), department: null, suggestedDepartment: { id: roads, name: 'A Roads' } })]);
+    // Not routed yet, but the AI suggested Roads: its managers get the decision; other managers don't.
+    expect((await call('get', '/assignments/queue', roadsMgr)).body.data.map((x: { publicId: string }) => x.publicId)).toEqual([c.publicId]);
+    expect((await call('get', '/assignments/queue', waterMgr)).body.data).toEqual([]);
     expect((await call('get', '/assignments/queue', alice)).status).toBe(403);
     expect((await call('get', '/assignments/queue', w1)).status).toBe(403);
     await call('post', `/complaints/${c.publicId}/classify`, admin, { departmentId: roads, category: 'roads' });
@@ -277,7 +283,9 @@ describe('manual assignment', () => {
   it('managers decide only for complaints routed to their own department', async () => {
     const c = await file();
     await settle();
-    expect((await call('post', `/complaints/${c.publicId}/assign`, roadsMgr, body())).status).toBe(404); // can't see it yet
+    // The AI suggested Roads, so Roads managers can already see it; others can't.
+    expect((await call('post', `/complaints/${c.publicId}/assign`, waterMgr, body({ departmentId: water }))).status).toBe(404);
+    expect((await call('post', `/complaints/${c.publicId}/assign`, roadsMgr, body({ departmentId: water, category: 'water' }))).status).toBe(403);
     await call('post', `/complaints/${c.publicId}/classify`, admin, { departmentId: roads, category: 'roads' });
     expect((await call('post', `/complaints/${c.publicId}/assign`, roadsMgr, body({ departmentId: water, category: 'water' }))).status).toBe(403);
     expect((await call('post', `/complaints/${c.publicId}/assign`, waterMgr, body({ departmentId: water }))).status).toBe(404);

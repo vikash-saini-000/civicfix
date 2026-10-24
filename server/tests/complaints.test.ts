@@ -214,7 +214,8 @@ describe('listing and retrieval', () => {
     for (const who of [roadsMember, roadsManager]) {
       const res = await call('get', `/complaints/${c.publicId}`, who);
       expect(res.status).toBe(200);
-      expect(res.body.data.complaint.reporter).toEqual({ id: alice.id, name: 'alice' });
+      // Department staff get a stable pseudonym, never the reporter's name or account ID.
+      expect(res.body.data.complaint.reporter).toEqual({ alias: expect.stringMatching(/^Reporter #[0-9a-f]{6}$/) });
       expect(JSON.stringify(res.body)).not.toMatch(/alice@t\.local|passwordHash|citizen"/);
       expect((await call('get', '/complaints?scope=department', who)).body.data.map((x: { publicId: string }) => x.publicId)).toEqual([c.publicId]);
     }
@@ -308,7 +309,7 @@ describe('triage actions', () => {
       confirmedCategory: 'roads',
       priority: 'P2',
       department: { id: roads, name: 'Roads Test' },
-      allowedActions: ['classify', 'reject'],
+      allowedActions: ['classify', 'reject', 'link_duplicate'],
     });
     expect(res.body.data.complaint.statusHistory.at(-1)).toMatchObject({ status: 'UNDER_REVIEW', note: 'Sent to Roads Test for review.' });
     const entry = await AuditLog.findOne({ action: 'complaint.classified', targetId: c.id }).lean();

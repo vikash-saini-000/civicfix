@@ -26,6 +26,8 @@ npm run dev               # tsx watch, http://localhost:4000
 | `npm run user:create:prod` / `npm run db:sync-indexes:prod` | Same scripts from the compiled build (no dev dependencies needed) |
 | `npm run user:create` | Create an account outside public registration, e.g. the first `PLATFORM_ADMIN` (password from `NEW_USER_PASSWORD`) |
 | `npm run db:sync-indexes` | Create/update model indexes (needed in production, where auto-indexing is off). It also drops indexes no longer in the schemas. |
+| `npm run db:seed` | Local demo data (refused in production): `admin@civicfix.local`, `citizen@civicfix.local`, and one department per category with `<dept>.manager@`, `<dept>.worker1@`, `<dept>.worker2@civicfix.local`. All use `SEED_PASSWORD`. Safe to re-run. |
+| `npm run e2e:live` | Full journey (complaint → AI → assignment → work → verification → dispute → rework → close → feedback, plus notifications, dashboards, audit) over HTTP against the **running** server. Needs `db:seed`; reads `SEED_PASSWORD` from the env or `.seed-credentials`. Makes real AI calls when AI is on. |
 
 ## Environment variables
 

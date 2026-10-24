@@ -6,6 +6,7 @@ import { AIAnalysis, Complaint, Dispute, Evidence, WorkOrder } from '../models/i
 import { MAX_IMAGE_BYTES, MAX_VIDEO_BYTES } from '../models/Evidence.js';
 import type { ObjectStorage } from '../storage/index.js';
 import { AppError, notFoundError, validationError } from '../utils/errors.js';
+import { readCaptureMetadata } from './analysis/exif.js';
 import { sniffMediaType } from './analysis/mediaAuthenticity.js';
 import { auditUserAction } from './audit.js';
 import { relationTo, type ComplaintService } from './complaints.js';
@@ -13,6 +14,9 @@ import { rolesOn } from './workOrders.js';
 
 export const MAX_EVIDENCE_PER_COMPLAINT = 30;
 const EXTENSIONS: Record<string, string> = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'video/mp4': 'mp4' };
+
+/** Which copy of a file to download. `auto` = the original for its uploader, the privacy copy for everyone else. */
+export type DownloadVariant = 'auto' | 'shared' | 'original';
 
 export interface UploadInput {
   purpose: EvidencePurpose;
@@ -25,8 +29,8 @@ export interface UploadInput {
 export interface EvidenceServiceDeps {
   storage: ObjectStorage;
   complaints: ComplaintService;
-  /** Queues the authenticity check (Phase 7 analyzer) for a stored file. */
-  queueAnalysis?: (complaintId: Types.ObjectId, evidenceId: Types.ObjectId, requestedBy: string) => Promise<unknown>;
+  /** Queues the privacy copy, the authenticity check and, for RESOLUTION files, the before/after comparison. */
+  queueAnalysis?: (complaintId: Types.ObjectId, evidenceId: Types.ObjectId, requestedBy: string, purpose: EvidencePurpose, mediaType: 'IMAGE' | 'VIDEO') => Promise<unknown>;
   onQueueError?: (err: unknown) => void;
 }
 
@@ -65,6 +69,11 @@ export function createEvidenceService(deps: EvidenceServiceDeps) {
     }
   }
 
+  function privacyView(r: { state: string; faces?: number; licensePlates?: number } | undefined) {
+    if (!r) return { state: 'NOT_SUPPORTED', facesBlurred: 0, licensePlatesBlurred: 0 };
+    return { state: r.state, facesBlurred: r.faces ?? 0, licensePlatesBlurred: r.licensePlates ?? 0 };
+  }
+
   function toView(e: EvidenceDoc, viewerIsStaff: boolean, authenticity?: string) {
     return {
       id: String(e._id),
@@ -74,12 +83,15 @@ export function createEvidenceService(deps: EvidenceServiceDeps) {
       sizeBytes: e.sizeBytes,
       sha256: e.sha256 ?? null,
       caption: e.notes ?? null,
-      uploadedBy: { id: String(e.uploadedBy), isReporter: e._reporter === true },
+      // Staff never get the reporter's account ID (reporter identity is hidden from departments).
+      uploadedBy: { id: viewerIsStaff && e._reporter === true ? null : String(e.uploadedBy), isReporter: e._reporter === true },
       workOrderId: e.workOrder ? String(e.workOrder) : null,
       disputeId: e.dispute ? String(e.dispute) : null,
       createdAt: (e.createdAt as Date).toISOString(),
       // Download goes through an authorized endpoint; storage keys and paths are never exposed.
       contentUrl: `/api/v1/evidence/${e._id}/content`,
+      // PENDING while faces/plates are being blurred; other viewers can download once it is ready.
+      privacy: privacyView(e.redaction),
       ...(viewerIsStaff && { authenticity: authenticity ?? 'NOT_ANALYZED' }),
     };
   }
@@ -111,6 +123,9 @@ export function createEvidenceService(deps: EvidenceServiceDeps) {
         throw new AppError('CONFLICT', `A complaint can have at most ${MAX_EVIDENCE_PER_COMPLAINT} files.`);
       }
 
+      // Capture time and GPS from the file itself (JPEG EXIF). Hints for verification, never proof.
+      const capture = sniffed === 'image/jpeg' ? readCaptureMetadata(input.bytes) : {};
+
       const id = new Types.ObjectId();
       const key = `evidence/${String(complaintId)}/${String(id)}-${randomUUID()}.${EXTENSIONS[sniffed]}`;
       await storage.put(key, input.bytes, sniffed);
@@ -130,13 +145,17 @@ export function createEvidenceService(deps: EvidenceServiceDeps) {
           storageKey: key,
           sha256: createHash('sha256').update(input.bytes).digest('hex'),
           notes: input.caption,
+          capturedAt: capture.capturedAt,
+          captureLocation: capture.location ? { type: 'Point', coordinates: [capture.location.lng, capture.location.lat] } : undefined,
+          // Images get a shareable copy without metadata, with faces and number plates blurred.
+          redaction: { state: sniffed === 'video/mp4' ? 'NOT_SUPPORTED' : 'PENDING', updatedAt: new Date() },
         });
       } catch (err) {
         await storage.delete(key).catch(() => undefined); // don't leave an orphan file
         throw err;
       }
       await auditUserAction({ actor: p, action: 'evidence.uploaded', targetType: 'Evidence', targetId: doc._id, requestId, changes: [{ field: 'purpose', after: input.purpose }, { field: 'sizeBytes', after: input.bytes.length }] });
-      if (deps.queueAnalysis) await deps.queueAnalysis(complaintId, doc._id, p.userId).catch((err) => deps.onQueueError?.(err));
+      if (deps.queueAnalysis) await deps.queueAnalysis(complaintId, doc._id, p.userId, input.purpose, sniffed === 'video/mp4' ? 'VIDEO' : 'IMAGE').catch((err) => deps.onQueueError?.(err));
       const lean = { ...(doc.toObject() as EvidenceDoc), _reporter: relation === 'reporter' };
       return toView(lean, relation !== 'reporter', 'ANALYSIS_PENDING');
     },
@@ -151,15 +170,43 @@ export function createEvidenceService(deps: EvidenceServiceDeps) {
       return docs.map((d) => toView({ ...d, _reporter: String(d.uploadedBy) === String(complaint?.citizen) }, staff, auth.get(String(d._id))));
     },
 
-    /** File bytes after the same access check as the complaint. Every download is audited. */
-    async download(p: Principal, evidenceId: string, requestId: string) {
+    /**
+     * File bytes after the same access check as the complaint. Every download is audited.
+     * Privacy: images are served as the shareable copy (no metadata; faces and number plates blurred).
+     * The original goes only to its uploader, or to a platform admin who asks for it explicitly.
+     * Videos (no copy is made) and files uploaded before this feature are served as stored.
+     */
+    async download(p: Principal, evidenceId: string, requestId: string, variant: DownloadVariant = 'auto') {
       const ev = await Evidence.findById(evidenceId).lean();
       if (!ev) throw notFoundError('The file');
-      const complaint = await Complaint.findById(ev.complaint).select('citizen department').lean();
+      const complaint = await Complaint.findById(ev.complaint).select('citizen department routingReview').lean();
       if (!complaint || !relationTo(p, complaint)) throw notFoundError('The file');
-      const bytes = await storage.get(ev.storageKey);
-      await auditUserAction({ actor: p, action: 'evidence.downloaded', targetType: 'Evidence', targetId: ev._id, requestId });
-      return { bytes, contentType: ev.contentType, filename: `${String(ev._id)}.${EXTENSIONS[ev.contentType] ?? 'bin'}` };
+      const uploader = String(ev.uploadedBy) === p.userId;
+      const admin = p.roles.has('PLATFORM_ADMIN');
+      if (variant === 'original' && !uploader && !admin) throw new AppError('FORBIDDEN', 'Only the uploader or a platform administrator can download the original file.');
+
+      const r = ev.redaction;
+      const hasCopy = r && (r.state === 'DONE' || r.state === 'METADATA_ONLY') && r.storageKey;
+      const wantOriginal = variant === 'original' || (variant === 'auto' && uploader) || !r || r.state === 'NOT_SUPPORTED';
+      let key = ev.storageKey;
+      let served: 'ORIGINAL' | 'SHARED' = 'ORIGINAL';
+      if (!wantOriginal) {
+        if (hasCopy) {
+          key = r.storageKey!;
+          served = 'SHARED';
+        } else if (r.state === 'PENDING') throw new AppError('CONFLICT', 'This photo is still being prepared for sharing (faces and number plates are blurred first). Try again in a few seconds.');
+        else throw new AppError('CONFLICT', 'This photo could not be prepared for sharing.');
+      }
+      const bytes = await storage.get(key);
+      await auditUserAction({
+        actor: p,
+        action: served === 'ORIGINAL' && !uploader ? 'evidence.original_downloaded' : 'evidence.downloaded',
+        targetType: 'Evidence',
+        targetId: ev._id,
+        requestId,
+        changes: [{ field: 'variant', after: served }],
+      });
+      return { bytes, contentType: ev.contentType, variant: served, filename: `${String(ev._id)}${served === 'SHARED' ? '-shared' : ''}.${EXTENSIONS[ev.contentType] ?? 'bin'}` };
     },
   };
 }
