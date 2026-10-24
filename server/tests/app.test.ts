@@ -63,8 +63,8 @@ describe('routing and errors', () => {
     });
   });
 
-  it('returns 404 under /api/v1 when the database is up (no product routes yet)', async () => {
-    expect((await request(makeApp()).get('/api/v1/complaints')).status).toBe(404);
+  it('returns 404 for unknown routes under /api/v1 when the database is up', async () => {
+    expect((await request(makeApp()).get('/api/v1/no-such-resource')).status).toBe(404);
   });
 
   it('refuses API traffic with 503 while the database is down', async () => {

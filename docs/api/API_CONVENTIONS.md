@@ -1,6 +1,6 @@
 # CivicFix API conventions
 
-Status: **Phase 5**. These conventions are implemented in `server/`. Implemented endpoints: health checks, authentication ([AUTHENTICATION.md](AUTHENTICATION.md)), and users, departments and memberships ([USERS_DEPARTMENTS_MEMBERSHIPS.md](USERS_DEPARTMENTS_MEMBERSHIPS.md)). Each future endpoint will be documented in this folder as it ships (see [Documenting endpoints](#documenting-endpoints)).
+Status: **Phase 6**. These conventions are implemented in `server/`. Implemented endpoints: health checks, authentication ([AUTHENTICATION.md](AUTHENTICATION.md)), users, departments and memberships ([USERS_DEPARTMENTS_MEMBERSHIPS.md](USERS_DEPARTMENTS_MEMBERSHIPS.md)), and complaints ([COMPLAINTS.md](COMPLAINTS.md)). Each future endpoint will be documented in this folder as it ships (see [Documenting endpoints](#documenting-endpoints)).
 
 ## 1. Base path and versioning
 

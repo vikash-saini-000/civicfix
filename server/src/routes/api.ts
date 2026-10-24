@@ -1,12 +1,15 @@
 import { Router } from 'express';
+import type { RateLimitOptions } from '../middleware/rateLimit.js';
+import { createComplaintService } from '../services/complaints.js';
 import { createDepartmentService } from '../services/departments.js';
 import { createMembershipService } from '../services/memberships.js';
 import { createUserService } from '../services/users.js';
 import { authRouter, type AuthRouterDeps } from './auth.js';
+import { complaintsRouter } from './complaints.js';
 import { departmentsRouter } from './departments.js';
 import { usersRouter } from './users.js';
 
-export type ApiDeps = AuthRouterDeps;
+export type ApiDeps = AuthRouterDeps & { complaintCreateLimit?: RateLimitOptions };
 
 /**
  * The /api/v1 router. Feature routers are mounted here as phases add them.
@@ -27,6 +30,10 @@ export function apiRouter(deps: ApiDeps): Router {
   router.use(
     '/departments',
     departmentsRouter({ authService, departmentService: createDepartmentService(), membershipService: createMembershipService() }),
+  );
+  router.use(
+    '/complaints',
+    complaintsRouter({ authService, complaintService: createComplaintService(), createLimit: deps.complaintCreateLimit }),
   );
   return router;
 }

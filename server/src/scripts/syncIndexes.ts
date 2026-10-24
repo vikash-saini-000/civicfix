@@ -15,8 +15,9 @@ try {
   await connectDatabase({ uri: config.mongodbUri, serverSelectionTimeoutMs: config.dbServerSelectionTimeoutMs, autoIndex: false, logger });
   for (const model of Object.values(models)) {
     if (typeof model === 'function' && model.prototype instanceof mongoose.Model) {
-      const dropped = await (model as mongoose.Model<unknown>).syncIndexes();
-      logger.info({ model: model.modelName, dropped }, 'indexes synced');
+      const m = model as unknown as mongoose.Model<unknown>;
+      const dropped = await m.syncIndexes();
+      logger.info({ model: m.modelName, dropped }, 'indexes synced');
     }
   }
 } catch (err) {

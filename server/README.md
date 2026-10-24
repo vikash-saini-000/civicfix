@@ -1,8 +1,8 @@
 # CivicFix server
 
-**Status:** Phase 5. Models, the Express foundation, the MongoDB connection, health checks, logging, graceful shutdown, request validation, the response envelope, JWT authentication with role guards, user profiles, departments and department memberships exist. There are no complaint, work-order or AI APIs yet.
+**Status:** Phase 6. Models, the Express foundation, the MongoDB connection, health checks, logging, graceful shutdown, request validation, the response envelope, JWT authentication with role guards, user profiles, departments, memberships and complaint APIs (create, scoped list and read, manual classify and reject) exist. There are no work-order, evidence or AI APIs yet.
 
-For client developers: [`API_CONVENTIONS.md`](../docs/api/API_CONVENTIONS.md), [`AUTHENTICATION.md`](../docs/api/AUTHENTICATION.md) and [`USERS_DEPARTMENTS_MEMBERSHIPS.md`](../docs/api/USERS_DEPARTMENTS_MEMBERSHIPS.md).
+For client developers: [`API_CONVENTIONS.md`](../docs/api/API_CONVENTIONS.md), [`AUTHENTICATION.md`](../docs/api/AUTHENTICATION.md) [`USERS_DEPARTMENTS_MEMBERSHIPS.md`](../docs/api/USERS_DEPARTMENTS_MEMBERSHIPS.md) and [`COMPLAINTS.md`](../docs/api/COMPLAINTS.md).
 
 Stack: Node 22+ (ESM), TypeScript, Express 5, Mongoose 9, zod 4, pino, Vitest.
 
@@ -95,6 +95,17 @@ Full contract: [`docs/api/AUTHENTICATION.md`](../docs/api/AUTHENTICATION.md).
 
 Membership authority is computed in `authorityOver(principal, departmentId)`: platform admin, or manager of **that** department, else none. Revoking sets `status: INACTIVE`, and adding the user again reactivates the same record, so the unique `(user, department)` index still holds. No schema changes were needed in Phase 5.
 
+## Complaints
+
+| Piece | File |
+|---|---|
+| Routes and request schemas | `src/routes/complaints.ts` |
+| Visibility, views, classify and reject | `src/services/complaints.ts` |
+| Status transition table (all phases; later ones unreachable) | `src/policies/complaintLifecycle.ts` |
+| Public ID sequence (`CF-YYYY-NNNNN`, atomic per year) | `src/models/Counter.ts` |
+
+Access is resolved into the MongoDB query (`scope` + filters combined with `$and`); inaccessible complaints return 404. Transitions use a conditional update on the current status, so concurrent actions can't both apply.
+
 ## Writing routes (conventions)
 
 Feature routers are mounted in `src/routes/api.ts`. Per route: `[rate limit] → requireAuth → requireRole / requireDepartmentRole → validate(...) → handler`. Identity comes only from `req.auth`.
@@ -145,6 +156,7 @@ MONGOMS_SYSTEM_BINARY="C:/Program Files/MongoDB/Server/8.0/bin/mongod.exe" npm t
 | `tests/lifecycle.test.ts` | DB connection failure, single connect, readiness up/down, graceful shutdown and timeout |
 | `tests/auth.test.ts` | Register, login, refresh rotation and reuse detection, logout, token tampering and expiry, rate limits, role and department guards, CORS, log and response secrecy |
 | `tests/departments.test.ts` | Profile updates, department CRUD and deactivation, membership add, reactivate, role change and revoke, per-department authority, concurrency, audit |
+| `tests/complaints.test.ts` | Complaint creation (field allowlist, IDs, rate limit), visibility per role and department, filters, classify and reject lifecycle, races |
 | `tests/conventions.test.ts` | Validation details, unknown-field rejection, 415, pagination limits, success envelope, error mapping (409/400/500), rate limit, log content |
 
 ## Transactions

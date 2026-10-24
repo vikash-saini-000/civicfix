@@ -11,6 +11,7 @@ export { Notification } from './Notification.js';
 export { Dispute } from './Dispute.js';
 export { Feedback } from './Feedback.js';
 export { AuthSession, SESSION_REVOKE_REASONS } from './AuthSession.js';
+export { Counter, nextSequence } from './Counter.js';
 export type { UserFields } from './User.js';
 export type { DepartmentFields } from './Department.js';
 export type { DepartmentMembershipFields } from './DepartmentMembership.js';

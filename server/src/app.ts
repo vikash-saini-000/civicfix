@@ -8,6 +8,7 @@ import { requireJson } from './middleware/requireJson.js';
 import { createAuthService } from './auth/authService.js';
 import { apiRouter } from './routes/api.js';
 import type { AuthRateLimits } from './routes/auth.js';
+import type { RateLimitOptions } from './middleware/rateLimit.js';
 import { healthRouter, type HealthDeps } from './routes/health.js';
 import { AppError } from './utils/errors.js';
 import type { Logger } from './utils/logger.js';
@@ -21,6 +22,8 @@ export interface AppDeps extends HealthDeps {
   api?: Router;
   /** Override auth rate limits (tests). */
   authRateLimits?: AuthRateLimits;
+  /** Override the per-user complaint creation limit (tests). */
+  complaintCreateLimit?: RateLimitOptions;
 }
 
 /**
@@ -77,6 +80,7 @@ export function createApp(deps: AppDeps): Express {
         authConfig: config.auth,
         corsOrigins: config.corsOrigins,
         rateLimits: deps.authRateLimits,
+        complaintCreateLimit: deps.complaintCreateLimit,
       }),
   );
   app.use('/api/v1', api);
