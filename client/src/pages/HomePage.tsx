@@ -25,7 +25,7 @@ export function HomePage() {
       setTrackError('Enter a valid complaint ID.');
       return;
     }
-    navigate(`/citizen/complaints/${id}`);
+    navigate(`/citizen/complaints/${encodeURIComponent(id)}`);
   }
 
   return (
