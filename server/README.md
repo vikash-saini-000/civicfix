@@ -1,8 +1,10 @@
 # CivicFix server
 
-**Status:** Phase 2. Models, the Express foundation, the MongoDB connection, health checks, logging, error handling and graceful shutdown exist. There are **no product APIs yet** (no auth, complaints, AI, etc.).
+**Status:** Phase 4. Models, the Express foundation, the MongoDB connection, health checks, logging, graceful shutdown, request validation, the response envelope, and JWT authentication with role guards exist. There are no complaint, department or AI APIs yet.
 
-Stack: Node 22+ (ESM), TypeScript, Express 5, Mongoose 9, pino, Vitest.
+For client developers: [`docs/api/API_CONVENTIONS.md`](../docs/api/API_CONVENTIONS.md) and [`docs/api/AUTHENTICATION.md`](../docs/api/AUTHENTICATION.md).
+
+Stack: Node 22+ (ESM), TypeScript, Express 5, Mongoose 9, zod 4, pino, Vitest.
 
 ## Run locally
 
@@ -11,7 +13,7 @@ Requires a running MongoDB (local 8.0 service is fine).
 ```bash
 cd server
 npm install
-cp .env.example .env      # then edit values if needed
+cp .env.example .env      # then set JWT_SECRET (see the comment in the file)
 npm run dev               # tsx watch, http://localhost:4000
 ```
 
@@ -21,6 +23,7 @@ npm run dev               # tsx watch, http://localhost:4000
 | `npm run build` / `npm start` | Compile to `dist/` / run the compiled server |
 | `npm run typecheck` | Type-check source and tests |
 | `npm test` | Run all tests |
+| `npm run user:create` | Create an account outside public registration, e.g. the first `PLATFORM_ADMIN` (password from `NEW_USER_PASSWORD`) |
 | `npm run db:sync-indexes` | Create/update model indexes (needed in production, where auto-indexing is off). It also drops indexes no longer in the schemas. |
 
 ## Environment variables
@@ -30,6 +33,11 @@ npm run dev               # tsx watch, http://localhost:4000
 | Variable | Default | Purpose |
 |---|---|---|
 | `MONGODB_URI` | **required** | `mongodb://` or `mongodb+srv://` connection string. Never logged. |
+| `JWT_SECRET` | **required** | Access-token signing key, at least 32 random characters. Placeholder-looking values are rejected. |
+| `ACCESS_TOKEN_TTL_SECONDS` | `900` | Access-token lifetime (60–3600) |
+| `REFRESH_TOKEN_TTL_DAYS` | `7` | Session lifetime from sign-in (1–30) |
+| `COOKIE_SECURE` | `true` in production, else `false` | Refresh cookie `Secure` flag. Can't be `false` in production. |
+| `COOKIE_SAMESITE` | `lax` | `strict`, `lax` or `none` (`none` needs `COOKIE_SECURE=true`) |
 | `NODE_ENV` | `development` | `development`, `test` or `production` |
 | `HOST` / `PORT` | `0.0.0.0` / `4000` | HTTP listen address |
 | `CORS_ORIGINS` | none | Comma-separated exact origins (e.g. `http://localhost:5173`). `*` is rejected. Required and https-only in production. |
@@ -37,6 +45,7 @@ npm run dev               # tsx watch, http://localhost:4000
 | `LOG_LEVEL` | `info` (`silent` in test) | pino level |
 | `SHUTDOWN_TIMEOUT_MS` | `10000` | Time in-flight requests get during shutdown |
 | `DB_SERVER_SELECTION_TIMEOUT_MS` | `10000` | How long startup waits for MongoDB |
+| `TRUST_PROXY` | `0` | Number of reverse proxies in front of the API (0–10). Set it when deployed behind one, so client IPs and rate limits are correct. |
 
 ## Startup, database and shutdown
 
@@ -46,7 +55,7 @@ npm run dev               # tsx watch, http://localhost:4000
 4. If MongoDB drops later, the driver reconnects on its own. Meanwhile `/health/ready` returns 503 and every `/api/v1` request gets `503 SERVICE_UNAVAILABLE`.
 5. On `SIGINT`/`SIGTERM` (Ctrl+C): readiness turns 503, the server stops accepting connections, in-flight requests get `SHUTDOWN_TIMEOUT_MS` to finish (then sockets are force-closed and the exit code is 1), then MongoDB is disconnected. Repeated signals don't repeat the work.
 
-`src/app.ts` builds the Express app without listening or connecting, so tests can use it directly. Middleware order: request ID → request log → helmet → CORS → JSON parser → `/health` → `/api/v1` (database guard) → 404 → error handler.
+`src/app.ts` builds the Express app without listening or connecting, so tests can use it directly. Middleware order: request ID → request log → helmet → CORS → JSON parser → `/health` → `/api/v1` (database guard → JSON content-type check → feature routes) → 404 → error handler.
 
 ## Endpoints (infrastructure only)
 
@@ -54,21 +63,54 @@ npm run dev               # tsx watch, http://localhost:4000
 |---|---|
 | `GET /health/live` | `200 {"status":"ok"}`. Never touches the database. |
 | `GET /health/ready` | `200 {"status":"ready","checks":{"database":"up"}}`, or `503 {"status":"not_ready","checks":{"database":"down"}}` when MongoDB is disconnected or doesn't answer a ping within 1 s, or while shutting down. |
-| anything else | `404` error body (below) |
+| anything else | `404` error body |
 
 `/api/v1` is the versioned namespace for product routes; it has none yet.
 
-**Error body**, for every error:
+## Authentication (summary)
 
-```json
-{ "error": { "code": "NOT_FOUND", "message": "No route for GET /x.", "requestId": "…" } }
+Full contract: [`docs/api/AUTHENTICATION.md`](../docs/api/AUTHENTICATION.md).
+
+- A 15-minute JWT access token goes in `Authorization: Bearer`. A 7-day rotating refresh token sits in an HttpOnly cookie, and only its SHA-256 hash is stored in `AuthSession`.
+- `requireAuth(authService)` verifies the token, then loads the session, user and active memberships on **every** request. Logout, suspension and role changes therefore apply immediately.
+- Passwords are hashed with Argon2id (`@node-rs/argon2`, OWASP parameters). Unknown-email logins still run a dummy verify, so timing doesn't reveal which accounts exist.
+- Audit entries are written for `user.registered`, `auth.login_succeeded`, `auth.login_failed`, `auth.logout`, `auth.refresh_token_reused` and `user.provisioned`.
+
+| Piece | File |
+|---|---|
+| Register / login / refresh / logout / authenticate | `src/auth/authService.ts` |
+| Routes, request schemas, rate limits | `src/routes/auth.ts` |
+| `requireAuth`, `requireRole`, `requireDepartmentRole`, `requireCsrfHeader` | `src/middleware/auth.ts` |
+| Role names and `Principal` (`req.auth`) | `src/auth/roles.ts` |
+| Tokens, password hashing, refresh cookie | `src/auth/tokens.ts`, `src/auth/password.ts`, `src/auth/cookies.ts` |
+| Session model | `src/models/AuthSession.ts` |
+
+## Writing routes (conventions)
+
+Feature routers are mounted in `src/routes/api.ts`. Per route: `[rate limit] → requireAuth → requireRole / requireDepartmentRole → validate(...) → handler`. Identity comes only from `req.auth`.
+
+```ts
+const body = z.strictObject({ title: text(5, 120) });     // strict: unknown fields are a 400
+router.post('/things', validate({ body }), async (req, res) => {
+  const input = req.validated.body as z.infer<typeof body>;
+  sendCreated(res, await createThing(input));             // { success: true, data }
+});
 ```
 
-Codes so far: `NOT_FOUND` 404, `INVALID_JSON` 400, `PAYLOAD_TOO_LARGE` 413, `UNSUPPORTED_ENCODING` 415, `SERVICE_UNAVAILABLE` 503 (with `Retry-After: 5`), `INTERNAL_ERROR` 500. Unexpected errors never return their message or stack in production or test; in development the 500 message includes the sanitized error message.
+| Piece | File |
+|---|---|
+| `validate({ params, query, body, headers })`, `req.validated` | `src/middleware/validate.ts` |
+| `objectId`, `complaintPublicId`, `text`, `queryInt`, `idParams` | `src/validation/common.ts` |
+| `paginationQuery`, `sortQuery`, `toSkipLimit`, `paginationMeta` | `src/validation/pagination.ts` |
+| `sendSuccess`, `sendCreated`, `sendNoContent` | `src/utils/respond.ts` |
+| `AppError`, error codes, `validationError`, `notFoundError` | `src/utils/errors.ts` |
+| `createRateLimiter({ windowMs, limit })` (not applied to any route yet) | `src/middleware/rateLimit.ts` |
+
+Throw `AppError` for expected failures. Anything else is logged with a redacted stack and returned as a generic 500. Mongoose validation and cast errors become 400, duplicate keys become 409 (field names only, never values), and database outages become 503. Response formats and codes: [`docs/api/API_CONVENTIONS.md`](../docs/api/API_CONVENTIONS.md).
 
 ## Logging and request IDs
 
-- Structured JSON logs (pino) with `time`, `level`, `service`, `env` and, per request, `requestId`. One line per request: method, path (without query string), status, duration.
+- Structured JSON logs (pino) with `time`, `level`, `service`, `env` and, per request, `requestId`. One line per request: method, path (without query string), status, error code, duration. 4xx errors appear only in that line; unexpected errors also get one line with a redacted stack.
 - Authorization headers, cookies, and password, token, secret and URI fields are redacted. Request bodies are never logged.
 - **Request ID policy:** an incoming `X-Request-Id` is kept if it is 8–64 characters of `A-Z a-z 0-9 . _ -`; otherwise a UUID is generated. It is returned in the `X-Request-Id` response header and in every error body.
 
@@ -91,6 +133,8 @@ MONGOMS_SYSTEM_BINARY="C:/Program Files/MongoDB/Server/8.0/bin/mongod.exe" npm t
 | `tests/env.test.ts` | Config validation and redaction |
 | `tests/app.test.ts` | Health, 404, malformed or oversized JSON, safe errors, request IDs, CORS, headers, log redaction |
 | `tests/lifecycle.test.ts` | DB connection failure, single connect, readiness up/down, graceful shutdown and timeout |
+| `tests/auth.test.ts` | Register, login, refresh rotation and reuse detection, logout, token tampering and expiry, rate limits, role and department guards, CORS, log and response secrecy |
+| `tests/conventions.test.ts` | Validation details, unknown-field rejection, 415, pagination limits, success envelope, error mapping (409/400/500), rate limit, log content |
 
 ## Transactions
 

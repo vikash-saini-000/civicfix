@@ -83,7 +83,10 @@ export class DatabaseConnectionError extends Error {
   }
 }
 
-export function safeError(err: unknown): { name: string; message: string } {
+/** Error summary that is safe to log: secrets are scrubbed from the message and, if requested, the stack. */
+export function safeError(err: unknown, opts: { stack?: boolean } = {}): { name: string; message: string; stack?: string } {
   const e = err instanceof Error ? err : new Error(String(err));
-  return { name: e.name, message: redactSecrets(e.message) };
+  const out: { name: string; message: string; stack?: string } = { name: e.name, message: redactSecrets(e.message) };
+  if (opts.stack && e.stack) out.stack = redactSecrets(e.stack);
+  return out;
 }

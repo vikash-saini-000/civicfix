@@ -1,4 +1,14 @@
 import { Error as MongooseError, Types, type Document } from 'mongoose';
+import type { AuthConfig } from '../src/config/env.js';
+
+/** Test-only signing key. Not used anywhere else. */
+export const testAuthConfig: AuthConfig = {
+  jwtSecret: 'tst-k3y-9f2c1a7e5b8d4f60a3c2e1b7d9f0a4c6',
+  accessTokenTtlSeconds: 900,
+  refreshTokenTtlDays: 7,
+  cookieSecure: false,
+  cookieSameSite: 'lax',
+};
 
 export const oid = () => new Types.ObjectId();
 

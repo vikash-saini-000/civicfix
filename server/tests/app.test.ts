@@ -7,12 +7,13 @@ import { createApp, type AppDeps } from '../src/app.js';
 import { errorHandler } from '../src/middleware/errors.js';
 import { requestContext } from '../src/middleware/requestContext.js';
 import { createLogger } from '../src/utils/logger.js';
+import { testAuthConfig } from './helpers.js';
 
 const silent = createLogger({ logLevel: 'silent', nodeEnv: 'test' });
 
 function makeApp(overrides: Partial<AppDeps> = {}) {
   return createApp({
-    config: { nodeEnv: 'test', corsOrigins: ['http://localhost:5173'], jsonBodyLimit: '1kb' },
+    config: { nodeEnv: 'test', corsOrigins: ['http://localhost:5173'], jsonBodyLimit: '1kb', auth: testAuthConfig },
     logger: silent,
     isDatabaseConnected: () => true,
     checkDatabase: async () => true,
@@ -55,7 +56,11 @@ describe('routing and errors', () => {
   it('returns a consistent 404 for unknown routes', async () => {
     const res = await request(makeApp()).get('/nope');
     expect(res.status).toBe(404);
-    expect(res.body).toEqual({ error: { code: 'NOT_FOUND', message: 'No route for GET /nope.', requestId: res.headers['x-request-id'] } });
+    expect(res.body).toEqual({
+      success: false,
+      error: { code: 'NOT_FOUND', message: 'No route for GET /nope.', details: [] },
+      requestId: res.headers['x-request-id'],
+    });
   });
 
   it('returns 404 under /api/v1 when the database is up (no product routes yet)', async () => {
@@ -94,7 +99,7 @@ describe('request IDs', () => {
   it('keeps a valid incoming ID', async () => {
     const res = await request(makeApp()).get('/nope').set('X-Request-Id', 'client-req-12345');
     expect(res.headers['x-request-id']).toBe('client-req-12345');
-    expect(res.body.error.requestId).toBe('client-req-12345');
+    expect(res.body.requestId).toBe('client-req-12345');
   });
 
   it('replaces an unsafe incoming ID', async () => {

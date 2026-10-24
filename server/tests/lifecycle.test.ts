@@ -14,6 +14,7 @@ import {
 } from '../src/config/database.js';
 import { createLogger } from '../src/utils/logger.js';
 import { createShutdown } from '../src/utils/shutdown.js';
+import { testAuthConfig } from './helpers.js';
 
 const logger = createLogger({ logLevel: 'silent', nodeEnv: 'test' });
 
@@ -48,7 +49,7 @@ describe('database connection', () => {
     expect(await pingDatabase()).toBe(true);
 
     const app = createApp({
-      config: { nodeEnv: 'test', corsOrigins: [], jsonBodyLimit: '100kb' },
+      config: { nodeEnv: 'test', corsOrigins: [], jsonBodyLimit: '100kb', auth: testAuthConfig },
       logger,
       isDatabaseConnected,
       checkDatabase: () => pingDatabase(),

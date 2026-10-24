@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { ConfigError, loadConfig, redactMongoUri, redactSecrets } from '../src/config/env.js';
 
-const base = { MONGODB_URI: 'mongodb://127.0.0.1:27017/civicfix' };
+const JWT = 'k9f2c1a7e5b8d4f60a3c2e1b7d9f0a4c6x';
+const base = { MONGODB_URI: 'mongodb://127.0.0.1:27017/civicfix', JWT_SECRET: JWT };
 
 function issuesFor(env: Record<string, string>): string[] {
   try {
@@ -25,6 +26,8 @@ describe('loadConfig', () => {
       logLevel: 'info',
       shutdownTimeoutMs: 10_000,
       dbServerSelectionTimeoutMs: 10_000,
+      trustProxyHops: 0,
+      auth: { jwtSecret: JWT, accessTokenTtlSeconds: 900, refreshTokenTtlDays: 7, cookieSecure: false, cookieSameSite: 'lax' },
     });
   });
 
@@ -43,8 +46,8 @@ describe('loadConfig', () => {
   });
 
   it('requires a MongoDB URI', () => {
-    expect(issuesFor({})).toEqual(['MONGODB_URI is required']);
-    expect(issuesFor({ MONGODB_URI: 'postgres://x' })).toHaveLength(1);
+    expect(issuesFor({ JWT_SECRET: JWT })).toEqual(['MONGODB_URI is required']);
+    expect(issuesFor({ JWT_SECRET: JWT, MONGODB_URI: 'postgres://x' })).toHaveLength(1);
   });
 
   it('reports every invalid value at once', () => {
@@ -68,11 +71,29 @@ describe('loadConfig', () => {
 
   it('never includes secret values in error messages', () => {
     try {
-      loadConfig({ MONGODB_URI: 'not-a-uri-with-s3cret', PORT: 'abc' });
+      loadConfig({ MONGODB_URI: 'not-a-uri-with-s3cret', PORT: 'abc', JWT_SECRET: 'short-s3cret' });
       expect.unreachable();
     } catch (err) {
       expect((err as Error).message).not.toContain('s3cret');
     }
+  });
+});
+
+describe('auth config', () => {
+  it('requires a strong JWT secret', () => {
+    expect(issuesFor({ MONGODB_URI: base.MONGODB_URI })).toEqual(['JWT_SECRET is required']);
+    expect(issuesFor({ ...base, JWT_SECRET: 'too-short' })).toEqual(['JWT_SECRET must be at least 32 characters']);
+    expect(issuesFor({ ...base, JWT_SECRET: 'change-me-change-me-change-me-change-me' })).toHaveLength(1);
+    expect(issuesFor({ ...base, JWT_SECRET: 'a'.repeat(40) })).toHaveLength(1);
+  });
+
+  it('forces secure cookies in production and validates SameSite', () => {
+    const prod = { ...base, NODE_ENV: 'production', CORS_ORIGINS: 'https://civicfix.example' };
+    expect(loadConfig(prod).auth.cookieSecure).toBe(true);
+    expect(issuesFor({ ...prod, COOKIE_SECURE: 'false' })).toEqual(['COOKIE_SECURE cannot be false in production']);
+    expect(issuesFor({ ...base, COOKIE_SAMESITE: 'none' })).toEqual(['COOKIE_SAMESITE=none requires COOKIE_SECURE=true']);
+    expect(issuesFor({ ...base, COOKIE_SAMESITE: 'loose' })).toHaveLength(1);
+    expect(issuesFor({ ...base, ACCESS_TOKEN_TTL_SECONDS: '10' })).toHaveLength(1);
   });
 });
 
