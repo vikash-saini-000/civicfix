@@ -261,7 +261,8 @@ describe('classification', () => {
   it('a gateway rejection (no prepaid balance, bad key, unknown model) leaves the complaint untouched for manual triage', async () => {
     const headers = new Headers();
     const rejections: [unknown, string, number][] = [
-      [new Anthropic.APIError(402, { type: 'error', error: { type: 'billing_error', message: 'Insufficient balance' } }, 'no funds', headers), 'BAD_REQUEST', 1],
+      [new Anthropic.APIError(402, { type: 'error', error: { type: 'billing_error', message: 'Insufficient balance' } }, 'no funds', headers), 'CREDITS_EXHAUSTED', 1],
+      [new Anthropic.APIError(402, { type: 'error', error: { type: 'billing_error', message: 'API Key Budget Exceeded.' } }, 'budget', headers), 'CREDITS_EXHAUSTED', 1],
       [new Anthropic.AuthenticationError(401, { type: 'error', error: { type: 'authentication_error', message: 'bad key' } }, 'bad key', headers), 'AUTH_FAILED', 1],
       // 503 = no provider for this model on AiCredits: transient-looking, so bounded retries, then manual triage.
       [new Anthropic.InternalServerError(503, { type: 'error', error: { type: 'service_unavailable', message: 'no provider' } }, 'n/a', headers), 'UNAVAILABLE', 3],
@@ -623,7 +624,7 @@ describe('Anthropic adapter via AiCredits.in (real SDK, stubbed fetch, no networ
     stubFetch(() => json(402, { type: 'error', error: { type: 'billing_error', message: `Insufficient balance for key ${KEY}` }, request_id: 'req_test' }));
     const err = await createAnthropicProvider(config).classifyComplaint(input).catch((e) => e);
     expect(err).toBeInstanceOf(AiProviderError);
-    expect(err).toMatchObject({ kind: 'BAD_REQUEST', retryable: false });
+    expect(err).toMatchObject({ kind: 'CREDITS_EXHAUSTED', retryable: false });
     expect(err.detail).toContain('billing_error');
     expect(err.detail).not.toContain(KEY);
     expect(err.message).not.toContain(KEY);
@@ -686,10 +687,10 @@ describe('media authenticity', () => {
     expect(r).toMatchObject({ outcome: 'INCONCLUSIVE', visualModelRun: false, visualErrorCode: 'TIMEOUT' });
   });
 
-  it('checks only metadata for video and oversized images', async () => {
+  it('checks only metadata for video (without ffmpeg) and oversized images', async () => {
     const script = scriptedProvider([good()], clean);
     const v = await analyzeMedia(mp4, 'video/mp4', ctx, script.provider);
-    expect(v).toMatchObject({ outcome: 'INCONCLUSIVE', visualModelRun: false, visualErrorCode: 'VIDEO_FRAMES_NOT_SUPPORTED' });
+    expect(v).toMatchObject({ outcome: 'INCONCLUSIVE', visualModelRun: false, visualErrorCode: 'VIDEO_TOOLS_UNAVAILABLE' });
     const big = await analyzeMedia(Buffer.concat([jpeg(), Buffer.alloc(6 * 1024 * 1024)]), 'image/jpeg', ctx, script.provider);
     expect(big.visualErrorCode).toBe('TOO_LARGE_FOR_VISUAL_MODEL');
     expect(script.imageCalls()).toBe(0);

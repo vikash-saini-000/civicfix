@@ -9,7 +9,8 @@ import { Select, TextArea, TextInput } from '../components/Field';
 import { Page } from '../components/Layout';
 import { LocationPicker } from '../components/LocationPicker';
 import { Notification } from '../components/Notification';
-import { MAX_PHOTO_BYTES, MAX_PHOTOS, PhotoInput } from '../components/PhotoInput';
+import { MAX_PHOTOS, PhotoInput } from '../components/PhotoInput';
+import { mediaFileError } from '../lib/media';
 import { CATEGORIES, isValidGeoPoint, type CategoryId, type GeoPoint } from '../lib/domain';
 
 export const TITLE_MAX = 120;
@@ -56,9 +57,9 @@ export function ReportPage({ complaintApi = api }: ReportPageProps) {
 
     if (!isValidGeoPoint(location)) nextErrors.location = 'Place a valid pin on the map so the team can find the issue.';
 
-    if (photos.length > MAX_PHOTOS) nextErrors.photos = `Attach no more than ${MAX_PHOTOS} images.`;
-    else if (photos.some((photo) => !photo.type.startsWith('image/'))) nextErrors.photos = 'Choose image files only.';
-    else if (photos.some((photo) => photo.size > MAX_PHOTO_BYTES)) nextErrors.photos = 'Each image must be 10 MB or smaller.';
+    const fileProblem = photos.map(mediaFileError).find(Boolean);
+    if (photos.length > MAX_PHOTOS) nextErrors.photos = `Attach no more than ${MAX_PHOTOS} photos or videos.`;
+    else if (fileProblem) nextErrors.photos = fileProblem;
     else if (!photoAttachmentsSupported && photos.length > 0) {
       nextErrors.photos = 'Photo uploads are not available for the configured backend yet.';
     }
@@ -96,6 +97,12 @@ export function ReportPage({ complaintApi = api }: ReportPageProps) {
         state: { justSubmitted: true, photoUploadFailures: created.photoUploadFailures ?? 0 },
       });
     } catch (error) {
+      if (error instanceof ApiError && error.code === 'MEDIA_REJECTED') {
+        // Nothing was saved: send the citizen back to swap the photo.
+        setErrors((current) => ({ ...current, photos: error.message }));
+        setStep('details');
+        return;
+      }
       setSubmitError(getSubmissionErrorMessage(error));
     } finally {
       submitInFlight.current = false;
@@ -230,6 +237,11 @@ export function ReportPage({ complaintApi = api }: ReportPageProps) {
                         : 'Photo uploads are pending the backend media contract. You can still submit the issue and location.'
                     }
                   />
+                  {photoAttachmentsSupported && (
+                    <p className="text-[0.875rem] text-ink-muted">
+                      Use original photos or videos taken at the location. They are checked when you submit, and AI-generated or edited files are not accepted.
+                    </p>
+                  )}
                 </fieldset>
               </Card>
 

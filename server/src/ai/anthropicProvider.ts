@@ -9,6 +9,8 @@ import {
   COMPARE_PROMPT_VERSION,
   COMPARE_SYSTEM,
   IMAGE_PROMPT_VERSION,
+  VIDEO_PROMPT_VERSION,
+  VIDEO_SYSTEM,
   IMAGE_SYSTEM,
   PRIVACY_PROMPT_VERSION,
   PRIVACY_SYSTEM,
@@ -26,6 +28,7 @@ import {
   type AgentRunInput,
   type AgentStep,
   type AiProvider,
+  type VideoAssessmentInput,
   type AiResult,
   type ClassificationInput,
   type ClassificationOutput,
@@ -68,6 +71,12 @@ function detailOf(err: InstanceType<typeof Anthropic.APIError>): string {
   return `${err.status ?? '?'} ${body?.error?.type ?? ''} ${body?.error?.message ?? ''}`.replace(/sk-[\w-]{8,}/g, '[key]').trim().slice(0, 300);
 }
 
+/** Out of prepaid balance or over the API key's budget: 402, or a billing_error under another status. */
+function isBillingError(err: InstanceType<typeof Anthropic.APIError>): boolean {
+  const type = (err.error as { error?: { type?: string } } | undefined)?.error?.type;
+  return err.status === 402 || type === 'billing_error';
+}
+
 /** Maps SDK errors to provider-independent kinds. Most specific first. */
 function toProviderError(err: unknown): AiProviderError {
   if (err instanceof AiProviderError) return err;
@@ -76,6 +85,9 @@ function toProviderError(err: unknown): AiProviderError {
   if (err instanceof Anthropic.RateLimitError) return new AiProviderError('RATE_LIMITED', 'The AI provider rate-limited the request.');
   if (err instanceof Anthropic.AuthenticationError || err instanceof Anthropic.PermissionDeniedError) {
     return new AiProviderError('AUTH_FAILED', 'The AI provider rejected the credentials.', detailOf(err));
+  }
+  if (err instanceof Anthropic.APIError && isBillingError(err)) {
+    return new AiProviderError('CREDITS_EXHAUSTED', 'AI credits are exhausted (balance or API key budget).', detailOf(err));
   }
   if (err instanceof Anthropic.BadRequestError) return new AiProviderError('BAD_REQUEST', 'The AI provider rejected the request.', detailOf(err));
   if (err instanceof Anthropic.APIError) {
@@ -282,6 +294,21 @@ export function createAnthropicProvider(config: Pick<AiConfig, 'apiKey' | 'baseU
         content: classifyUserMessage({ ...input }),
         schema: classificationOutputSchema(input.departments.map((d) => d.ref)),
         promptVersion: CLASSIFY_PROMPT_VERSION,
+      });
+    },
+    assessVideo(input: VideoAssessmentInput): Promise<AiResult<ImageAssessment>> {
+      return call({
+        system: VIDEO_SYSTEM,
+        content: [
+          { type: 'text', text: `${input.frames.length} frames from one video lasting ${input.durationSec.toFixed(1)} s, in time order:` },
+          ...input.frames.flatMap((f): Anthropic.Beta.BetaContentBlockParam[] => [
+            { type: 'text', text: `Frame at ${f.atSec.toFixed(1)} s:` },
+            { type: 'image', source: { type: 'base64', media_type: f.mediaType, data: f.base64 } },
+          ]),
+          { type: 'text', text: imageUserMessage(input) },
+        ],
+        schema: imageAssessmentSchema,
+        promptVersion: VIDEO_PROMPT_VERSION,
       });
     },
     assessImage(input: ImageAssessmentInput): Promise<AiResult<ImageAssessment>> {

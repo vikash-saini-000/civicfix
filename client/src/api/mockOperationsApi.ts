@@ -16,6 +16,7 @@ export function createMockOperationsApi(): OperationsApi {
     uploadEvidence: unsupported,
     fetchEvidenceContent: unsupported,
     getAnalysis: unsupported,
+    rerunAnalysis: unsupported,
     listReviewQueue: unsupported,
     assignComplaint: unsupported,
     classifyComplaint: unsupported,

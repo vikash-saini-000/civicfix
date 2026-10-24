@@ -25,7 +25,8 @@ describe('application routes', () => {
     renderRoutes(['/login']);
 
     await waitFor(() => expect(screen.getByRole('heading', { name: 'Log in' })).toBeInTheDocument());
-    expect(document.title).toBe('Log in · CivicFix');
+    // The title is set in an effect after the heading renders, so wait for it too.
+    await waitFor(() => expect(document.title).toBe('Log in · CivicFix'));
   });
 
   it('renders a useful not-found screen', () => {

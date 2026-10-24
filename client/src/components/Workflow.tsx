@@ -1,11 +1,15 @@
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { api } from '../api';
+import { ApiError } from '../api/errors';
+import { useOptionalAuth } from '../auth/AuthContext';
 import type { ComplaintAnalysis, Evidence, EvidencePurpose, WorkOrderStatus } from '../api/operationsTypes';
 import { categoryLabel, formatDateTime, getPriorityMeta } from '../lib/domain';
 import { cx } from '../lib/cx';
+import { MAX_VIDEO_SECONDS, mediaFileError } from '../lib/media';
 import { useAction, useResource } from '../lib/useResource';
 import {
   ACCEPTED_UPLOAD_TYPES,
+  aiErrorLabel,
   AUTHENTICITY_LABELS,
   EVIDENCE_PURPOSE_LABELS,
   formatDistance,
@@ -137,7 +141,7 @@ export function ReasonAction({
 export function EvidencePanel({
   publicId,
   uploadPurpose,
-  uploadLabel = 'Add a photo',
+  uploadLabel = 'Add a photo or video',
   showAuthenticity = false,
   filter,
   onUploaded,
@@ -162,8 +166,8 @@ export function EvidencePanel({
     const file = files?.[0];
     if (inputRef.current) inputRef.current.value = '';
     if (!file || !uploadPurpose) return;
-    if (!ACCEPTED_UPLOAD_TYPES.includes(file.type)) return setError('Choose a JPEG, PNG or WebP image.');
-    if (file.size > 10 * 1024 * 1024) return setError('The image must be 10 MB or smaller.');
+    const problem = mediaFileError(file);
+    if (problem) return setError(problem);
     const created = await run(() => api.uploadEvidence(publicId, file, uploadPurpose));
     if (created) {
       onUploaded?.(created);
@@ -201,66 +205,135 @@ export function EvidencePanel({
           {error && <Notification kind="error" title={error} className="mb-3" />}
           <input ref={inputRef} type="file" accept={ACCEPTED_UPLOAD_TYPES.join(',')} className="sr-only" aria-label={uploadLabel} onChange={(e) => void upload(e.target.files)} />
           <Button variant="tertiary" size="sm" onClick={() => inputRef.current?.click()} disabled={busy}>
-            {busy ? 'Uploading…' : uploadLabel}
+            {busy ? 'Checking and uploading…' : uploadLabel}
           </Button>
+          <p className="mt-1 text-[0.75rem] text-ink-muted">
+            Use an original photo or video from your camera (videos: MP4 or MOV, up to {MAX_VIDEO_SECONDS} seconds). AI-generated or edited files are not accepted.
+          </p>
         </div>
       )}
     </section>
   );
 }
 
+/** How long to keep waiting for the shareable copy (faces and plates blurred; videos take longer). */
+const PREVIEW_RETRY_MS = 5000;
+const PREVIEW_MAX_TRIES = 24;
+
 function EvidencePreview({ evidence }: { evidence: Evidence }) {
   const [url, setUrl] = useState<string | null>(null);
-  const [failed, setFailed] = useState(false);
+  const [state, setState] = useState<'loading' | 'preparing' | 'failed'>('loading');
+  const isVideo = evidence.mediaType === 'VIDEO';
 
   useEffect(() => {
-    if (evidence.mediaType !== 'IMAGE') return;
     const controller = new AbortController();
     let objectUrl: string | null = null;
-    api
-      .fetchEvidenceContent(evidence.id, controller.signal)
-      .then((blob) => {
-        if (controller.signal.aborted || typeof URL.createObjectURL !== 'function') return;
-        objectUrl = URL.createObjectURL(blob);
-        setUrl(objectUrl);
-      })
-      .catch(() => {
-        if (!controller.signal.aborted) setFailed(true);
-      });
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const load = (attempt: number) => {
+      api
+        .fetchEvidenceContent(evidence.id, controller.signal)
+        .then((blob) => {
+          if (controller.signal.aborted || typeof URL.createObjectURL !== 'function') return;
+          objectUrl = URL.createObjectURL(blob);
+          setUrl(objectUrl);
+        })
+        .catch((error) => {
+          if (controller.signal.aborted) return;
+          // 409 = the privacy copy is still being made; try again shortly.
+          if (error instanceof ApiError && error.status === 409 && attempt < PREVIEW_MAX_TRIES) {
+            setState('preparing');
+            timer = setTimeout(() => load(attempt + 1), PREVIEW_RETRY_MS);
+          } else setState('failed');
+        });
+    };
+    load(1);
     return () => {
       controller.abort();
+      if (timer) clearTimeout(timer);
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [evidence.id, evidence.mediaType]);
+  }, [evidence.id]);
 
+  if (url && isVideo) {
+    return (
+      <video src={url} controls playsInline preload="metadata" aria-label={evidence.caption ?? 'Evidence video'} className="aspect-square w-full bg-black object-contain" />
+    );
+  }
   if (url) return <img src={url} alt={evidence.caption ?? 'Evidence photo'} className="aspect-square w-full object-cover" />;
+  const what = isVideo ? 'video' : 'photo';
   return (
     <div className="flex aspect-square items-center justify-center p-2 text-center text-[0.75rem] text-ink-muted">
-      {evidence.mediaType === 'VIDEO' ? 'Video file' : failed ? 'Preview unavailable' : 'Loading preview…'}
+      {state === 'failed' ? 'Preview unavailable' : state === 'preparing' ? `Preparing ${what} (blurring faces and number plates)…` : `Loading ${what}…`}
     </div>
   );
 }
 
+/** How often the panel checks again while the AI is still working. */
+const ANALYSIS_POLL_MS = 4000;
+
 /** AI suggestion, duplicates and photo checks for staff. Advice only: humans decide. */
 export function AnalysisPanel({ publicId, refreshKey = 0 }: { publicId: string; refreshKey?: number }) {
   const analysis = useResource((signal) => api.getAnalysis(publicId, signal), [publicId, refreshKey]);
+  const isAdmin = useOptionalAuth()?.state.user?.role === 'platform_admin';
+  const rerun = useAction();
+  const running = ['PENDING', 'RUNNING'].includes(analysis.data?.classification.status ?? '');
+  const { reload } = analysis;
+
+  // Keep checking while the AI works, so a re-run shows its result without a manual refresh.
+  useEffect(() => {
+    if (!running) return;
+    const timer = setTimeout(reload, ANALYSIS_POLL_MS);
+    return () => clearTimeout(timer);
+  }, [running, reload, analysis.data]);
+
+  async function rerunAi() {
+    const done = await rerun.run(async () => {
+      await api.rerunAnalysis(publicId);
+      return true;
+    });
+    if (done) reload();
+  }
+
   if (analysis.loading && !analysis.data) return <LoadingIndicator label="Loading AI analysis" />;
   if (analysis.error) {
     return <ErrorState title="AI analysis could not be loaded" description={analysis.error} onRetry={analysis.reload} />;
   }
   if (!analysis.data) return null;
-  return <AnalysisDetails analysis={analysis.data} onRefresh={analysis.reload} />;
+  return (
+    <AnalysisDetails
+      analysis={analysis.data}
+      onRefresh={reload}
+      rerun={isAdmin && analysis.data.aiEnabled ? { onRun: () => void rerunAi(), busy: rerun.busy || running, error: rerun.error } : undefined}
+    />
+  );
 }
 
-function AnalysisDetails({ analysis, onRefresh }: { analysis: ComplaintAnalysis; onRefresh: () => void }) {
+function AnalysisDetails({
+  analysis,
+  onRefresh,
+  rerun,
+}: {
+  analysis: ComplaintAnalysis;
+  onRefresh: () => void;
+  /** Platform admins only. */
+  rerun?: { onRun: () => void; busy: boolean; error: string | null };
+}) {
   const c = analysis.classification;
   const running = c.status === 'PENDING' || c.status === 'RUNNING';
   return (
     <Card className="flex flex-col gap-4 bg-surface-1">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h3 className="text-[1.125rem]">AI analysis</h3>
-        <Badge tone="info">Advice only</Badge>
+        <div className="flex flex-wrap items-center gap-2">
+          {rerun && (
+            <Button variant="tertiary" size="sm" onClick={rerun.onRun} disabled={rerun.busy}>
+              {running ? 'AI is running…' : 'Re-run AI'}
+            </Button>
+          )}
+          <Badge tone="info">Advice only</Badge>
+        </div>
       </div>
+      {rerun?.error && <Notification kind="error" title={rerun.error} />}
       {!analysis.aiEnabled && <p className="text-[0.875rem] text-ink-muted">AI is switched off on this server. Route this case manually.</p>}
       {running && (
         <div className="flex flex-wrap items-center gap-3">
@@ -269,7 +342,12 @@ function AnalysisDetails({ analysis, onRefresh }: { analysis: ComplaintAnalysis;
         </div>
       )}
       {(c.status === 'FAILED' || c.status === 'INVALID_OUTPUT') && (
-        <p className="text-[0.875rem] text-ink-muted">AI classification did not finish ({c.errorCode ?? c.status}). Route this case manually.</p>
+        <p className="text-[0.875rem] text-ink-muted">
+          AI classification did not finish: {aiErrorLabel(c.errorCode)}.{' '}
+          {c.errorCode === 'CREDITS_EXHAUSTED'
+            ? `Top up the AI credits (or raise the API key's budget)${rerun ? ', then use Re-run AI,' : ''} or route this case manually.`
+            : `${rerun ? 'Use Re-run AI or route' : 'Route'} this case manually.`}
+        </p>
       )}
       {c.status === 'SUCCEEDED' && c.suggestion && (
         <>

@@ -23,6 +23,7 @@ export interface Config {
   auth: AuthConfig;
   ai: AiConfig;
   storage: StorageConfig;
+  video: VideoConfig;
   verification: VerificationConfig;
 }
 
@@ -31,6 +32,14 @@ export interface StorageConfig {
   provider: (typeof STORAGE_PROVIDERS)[number];
   /** Directory for STORAGE_PROVIDER=local. */
   localDir: string;
+}
+
+export interface VideoConfig {
+  /** ffmpeg / ffprobe executables (name on PATH or full path). Missing = videos get metadata-only checks. */
+  ffmpegPath: string;
+  ffprobePath: string;
+  /** Longest accepted video upload, in seconds. */
+  maxSeconds: number;
 }
 
 export interface VerificationConfig {
@@ -58,6 +67,8 @@ export interface AiConfig {
   maxAttempts: number;
   /** `single` = one classification call per complaint; `agent` = bounded tool-using triage agent. */
   triageMode: AiTriageMode;
+  /** What happens to uploads flagged as AI-generated or edited. Default block. */
+  mediaUploadGate: MediaUploadGate;
   /** Max model calls per agent run (agent mode only). */
   agentMaxTurns: number;
   /**
@@ -66,6 +77,10 @@ export interface AiConfig {
    */
   embeddingModel: string | null;
 }
+
+/** block = refuse uploads the authenticity check flags as AI-generated or edited; flag = store them and mark for review. */
+export const MEDIA_UPLOAD_GATES = ['block', 'flag'] as const;
+export type MediaUploadGate = (typeof MEDIA_UPLOAD_GATES)[number];
 
 export const AI_TRIAGE_MODES = ['single', 'agent'] as const;
 export type AiTriageMode = (typeof AI_TRIAGE_MODES)[number];
@@ -198,6 +213,11 @@ export function loadConfig(env: Env = process.env): Config {
   const storageProvider = (read('STORAGE_PROVIDER') ?? 'disabled') as StorageConfig['provider'];
   if (!STORAGE_PROVIDERS.includes(storageProvider)) issues.push(`STORAGE_PROVIDER must be one of ${STORAGE_PROVIDERS.join(', ')}`);
   const storageLocalDir = read('STORAGE_LOCAL_DIR') ?? './uploads';
+  const mediaUploadGate = (read('MEDIA_UPLOAD_GATE') ?? 'block') as MediaUploadGate;
+  if (!MEDIA_UPLOAD_GATES.includes(mediaUploadGate)) issues.push(`MEDIA_UPLOAD_GATE must be one of ${MEDIA_UPLOAD_GATES.join(', ')}`);
+  const ffmpegPath = read('FFMPEG_PATH') ?? 'ffmpeg';
+  const ffprobePath = read('FFPROBE_PATH') ?? 'ffprobe';
+  const maxVideoSeconds = int('MAX_VIDEO_SECONDS', 60, 5, 300);
   const autoApproveRaw = read('AUTO_APPROVE_RESOLUTIONS') ?? 'false';
   if (!['true', 'false'].includes(autoApproveRaw)) issues.push('AUTO_APPROVE_RESOLUTIONS must be true or false');
   const disputeWindowDays = int('DISPUTE_WINDOW_DAYS', 14, 1, 90);
@@ -227,10 +247,12 @@ export function loadConfig(env: Env = process.env): Config {
       timeoutMs: aiTimeoutMs,
       maxAttempts: aiMaxAttempts,
       triageMode: aiTriageMode,
+      mediaUploadGate,
       agentMaxTurns: aiAgentMaxTurns,
       embeddingModel,
     },
     storage: { provider: storageProvider, localDir: storageLocalDir },
+    video: { ffmpegPath, ffprobePath, maxSeconds: maxVideoSeconds },
     verification: { autoApprove: autoApproveRaw === 'true', disputeWindowDays },
   };
 }

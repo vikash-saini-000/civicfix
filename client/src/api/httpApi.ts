@@ -124,6 +124,14 @@ export class HttpCivicFixApi implements CivicFixApi {
       selectedCategory: input.selectedCategory,
       ...(input.landmark ? { landmark: input.landmark } : {}),
     };
+    // Photos that look AI-generated or edited are refused before the complaint is created.
+    for (const [index, photo] of input.photos.entries()) {
+      const check = await this.checkMedia(photo, signal);
+      if (!check.allowed) {
+        const label = photo.name ? `"${photo.name}"` : `Photo ${index + 1}`;
+        throw new ApiError(`${label}: ${check.message ?? 'This file was not accepted.'}`, 422, 'MEDIA_REJECTED');
+      }
+    }
     const created = parseComplaint(await this.data<unknown>('/complaints', { method: 'POST', body, signal }));
     // Photos are uploaded after the complaint exists. A failed upload never loses the report itself.
     let uploaded = 0;
@@ -174,6 +182,10 @@ export class HttpCivicFixApi implements CivicFixApi {
     return (await this.data<{ analysis: ComplaintAnalysis }>(`/complaints/${enc(publicId)}/analysis`, { signal })).analysis;
   }
 
+  async rerunAnalysis(publicId: string, types: ('TRIAGE' | 'DUPLICATE_CANDIDATES')[] = ['TRIAGE', 'DUPLICATE_CANDIDATES'], signal?: AbortSignal): Promise<void> {
+    await this.data(`/complaints/${enc(publicId)}/analysis`, { method: 'POST', body: { types }, signal });
+  }
+
   async listReviewQueue(signal?: AbortSignal): Promise<ReviewQueueItem[]> {
     return this.all<ReviewQueueItem>('/assignments/queue', {}, signal);
   }
@@ -208,6 +220,17 @@ export class HttpCivicFixApi implements CivicFixApi {
     if (Array.isArray(data)) return data as Evidence[];
     if (isRecord(data) && Array.isArray(data.evidence)) return data.evidence as Evidence[];
     throw new ApiError('The evidence service returned an invalid response.', 502, 'INVALID_RESPONSE');
+  }
+
+  /** Asks the backend whether a photo/video would be accepted (AI-generated or edited files are not). Stores nothing. */
+  async checkMedia(file: File, signal?: AbortSignal): Promise<{ allowed: boolean; message: string | null }> {
+    const data = await this.data<{ allowed?: unknown; message?: unknown }>('/evidence/check', {
+      method: 'POST',
+      body: file,
+      contentType: file.type || 'application/octet-stream',
+      signal,
+    });
+    return { allowed: data?.allowed !== false, message: typeof data?.message === 'string' ? data.message : null };
   }
 
   async uploadEvidence(publicId: string, file: File, purpose: EvidencePurpose, caption?: string, signal?: AbortSignal): Promise<Evidence> {

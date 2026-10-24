@@ -39,6 +39,22 @@ export function reviewReasonLabel(reason: string): string {
   return REVIEW_REASON_LABELS[reason] ?? reason.replaceAll('_', ' ').toLowerCase();
 }
 
+/** Why an AI step failed, in plain words. Unknown codes fall back to a generic message. */
+const AI_ERROR_LABELS: Record<string, string> = {
+  CREDITS_EXHAUSTED: 'AI credits exhausted',
+  TIMEOUT: 'the AI service took too long',
+  UNAVAILABLE: 'the AI service was unavailable',
+  RATE_LIMITED: 'the AI service was busy',
+  AUTH_FAILED: 'the AI service rejected the API key',
+  NOT_CONFIGURED: 'AI is not configured on this server',
+  INVALID_OUTPUT: 'the AI gave an unusable answer',
+  REFUSED: 'the AI declined to answer',
+  BAD_REQUEST: 'the AI service rejected the request',
+};
+export function aiErrorLabel(code: string | null | undefined): string {
+  return (code && AI_ERROR_LABELS[code]) || 'an unexpected AI error';
+}
+
 export const AUTHENTICITY_LABELS: Record<string, string> = {
   NOT_ANALYZED: 'Not checked',
   ANALYSIS_PENDING: 'Check running',
@@ -57,7 +73,7 @@ export const EVIDENCE_PURPOSE_LABELS: Record<string, string> = {
   DISPUTE: 'Dispute evidence',
 };
 
-export const ACCEPTED_UPLOAD_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
+export { ACCEPTED_MEDIA_TYPES as ACCEPTED_UPLOAD_TYPES } from './media';
 
 export function formatDistance(meters: number): string {
   return meters < 1000 ? `${Math.round(meters)} m` : `${(meters / 1000).toFixed(1)} km`;

@@ -151,8 +151,9 @@ describe('HttpCivicFixApi', () => {
     await expect(api.listMyComplaints()).rejects.toMatchObject({ status: 502, code: 'INVALID_RESPONSE' });
   });
 
-  it('creates the complaint, then uploads each photo as raw evidence', async () => {
+  it('checks each photo, creates the complaint, then uploads each photo as raw evidence', async () => {
     const fetchMock = vi.fn()
+      .mockResolvedValueOnce(ok({ allowed: true, message: null }))
       .mockResolvedValueOnce(json({ success: true, data: { complaint: { ...complaint, publicId: 'CF-2026-00420' } } }, 201))
       .mockResolvedValueOnce(json({ success: true, data: { evidence: { id: 'e1' } } }, 201));
     vi.stubGlobal('fetch', fetchMock);
@@ -167,17 +168,35 @@ describe('HttpCivicFixApi', () => {
       photos: [photo],
     });
     expect(created).toMatchObject({ publicId: 'CF-2026-00420', photoCount: 1 });
-    expect(fetchMock.mock.calls[0]![1]).toMatchObject({
+    expect(fetchMock.mock.calls[0]![0]).toBe('/api/v1/evidence/check');
+    expect((fetchMock.mock.calls[0]![1] as RequestInit).body).toBe(photo);
+    expect(fetchMock.mock.calls[1]![1]).toMatchObject({
       method: 'POST',
       body: JSON.stringify({ title: 'Pothole', description: 'A deep pothole near the bus stop.', location: { lat: 13.0108, lng: 74.7943 }, selectedCategory: 'roads' }),
     });
-    expect(fetchMock.mock.calls[1]![0]).toBe('/api/v1/complaints/CF-2026-00420/evidence?purpose=COMPLAINT_REPORT');
-    expect(headerOf(fetchMock.mock.calls[1]!, 'Content-Type')).toBe('image/png');
-    expect((fetchMock.mock.calls[1]![1] as RequestInit).body).toBe(photo);
+    expect(fetchMock.mock.calls[2]![0]).toBe('/api/v1/complaints/CF-2026-00420/evidence?purpose=COMPLAINT_REPORT');
+    expect(headerOf(fetchMock.mock.calls[2]!, 'Content-Type')).toBe('image/png');
+    expect((fetchMock.mock.calls[2]![1] as RequestInit).body).toBe(photo);
+  });
+
+  it('does not create the complaint when a photo looks AI-generated or edited', async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(ok({ allowed: false, message: 'This file looks AI-generated or edited, so it was not accepted.' }));
+    vi.stubGlobal('fetch', fetchMock);
+    const api = new HttpCivicFixApi({ baseUrl: '', timeoutMs: 1000 });
+
+    await expect(api.submitComplaint({
+      title: 'Pothole',
+      description: 'A deep pothole near the bus stop.',
+      location: { lat: 13.0108, lng: 74.7943 },
+      selectedCategory: 'roads',
+      photos: [new File(['x'], 'fake.jpg', { type: 'image/jpeg' })],
+    })).rejects.toMatchObject({ status: 422, code: 'MEDIA_REJECTED', message: expect.stringContaining('"fake.jpg"') });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it('keeps the complaint when a photo upload fails and reports how many failed', async () => {
     vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(ok({ allowed: true, message: null }))
       .mockResolvedValueOnce(json({ success: true, data: { complaint } }, 201))
       .mockResolvedValueOnce(fail(503, 'SERVICE_UNAVAILABLE')));
     const api = new HttpCivicFixApi({ baseUrl: '', timeoutMs: 1000 });

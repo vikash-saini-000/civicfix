@@ -1,4 +1,5 @@
 import cors from 'cors';
+import type { VideoTools } from './media/video.js';
 import express, { Router, type Express } from 'express';
 import helmet from 'helmet';
 import type { Config } from './config/env.js';
@@ -44,6 +45,9 @@ export interface AppDeps extends HealthDeps {
   verificationPolicy?: VerificationPolicy;
   /** Evidence file storage. Defaults to disabled (uploads answer 503). */
   storage?: ObjectStorage;
+  /** ffmpeg tools for video uploads. Defaults to disabled (videos stored with metadata-only checks). */
+  video?: VideoTools;
+  maxVideoSeconds?: number;
   uploadLimit?: RateLimitOptions;
 }
 
@@ -111,6 +115,8 @@ export function createApp(deps: AppDeps): Express {
         assignmentPolicy: deps.assignmentPolicy,
         verificationPolicy: deps.verificationPolicy,
         storage: deps.storage,
+        video: deps.video,
+        maxVideoSeconds: deps.maxVideoSeconds,
         uploadLimit: deps.uploadLimit,
       });
   if (routers.uploads) api.use(routers.uploads);

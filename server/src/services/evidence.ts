@@ -3,17 +3,19 @@ import { Types } from 'mongoose';
 import type { Principal } from '../auth/roles.js';
 import type { EvidencePurpose } from '../models/enums.js';
 import { AIAnalysis, Complaint, Dispute, Evidence, WorkOrder } from '../models/index.js';
-import { MAX_IMAGE_BYTES, MAX_VIDEO_BYTES } from '../models/Evidence.js';
+import { DEFAULT_MAX_VIDEO_SECONDS, MAX_IMAGE_BYTES, MAX_VIDEO_BYTES } from '../models/Evidence.js';
+import { disabledVideoTools, VideoProcessingError, type VideoProbe, type VideoTools } from '../media/video.js';
 import type { ObjectStorage } from '../storage/index.js';
 import { AppError, notFoundError, validationError } from '../utils/errors.js';
 import { readCaptureMetadata } from './analysis/exif.js';
-import { sniffMediaType } from './analysis/mediaAuthenticity.js';
+import type { ScreenResult } from './analysis/index.js';
+import { isVideoType, sniffMediaType, typesMatch, type AuthenticityResult } from './analysis/mediaAuthenticity.js';
 import { auditUserAction } from './audit.js';
 import { relationTo, type ComplaintService } from './complaints.js';
 import { rolesOn } from './workOrders.js';
 
 export const MAX_EVIDENCE_PER_COMPLAINT = 30;
-const EXTENSIONS: Record<string, string> = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'video/mp4': 'mp4' };
+const EXTENSIONS: Record<string, string> = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'video/mp4': 'mp4', 'video/quicktime': 'mov' };
 
 /** Which copy of a file to download. `auto` = the original for its uploader, the privacy copy for everyone else. */
 export type DownloadVariant = 'auto' | 'shared' | 'original';
@@ -30,14 +32,53 @@ export interface EvidenceServiceDeps {
   storage: ObjectStorage;
   complaints: ComplaintService;
   /** Queues the privacy copy, the authenticity check and, for RESOLUTION files, the before/after comparison. */
-  queueAnalysis?: (complaintId: Types.ObjectId, evidenceId: Types.ObjectId, requestedBy: string, purpose: EvidencePurpose, mediaType: 'IMAGE' | 'VIDEO') => Promise<unknown>;
+  queueAnalysis?: (complaintId: Types.ObjectId, evidenceId: Types.ObjectId, requestedBy: string, purpose: EvidencePurpose, mediaType: 'IMAGE' | 'VIDEO', screened?: AuthenticityResult) => Promise<unknown>;
+  /** Authenticity check before a file is stored. Files it doesn't allow are refused (MEDIA_REJECTED). */
+  screenUpload?: (bytes: Buffer, mediaType: string, context: { complaintTitle: string; complaintDescription: string }) => Promise<ScreenResult>;
   onQueueError?: (err: unknown) => void;
+  /** ffmpeg tools: read video length, recording time and GPS at upload. Disabled = videos are stored unchecked. */
+  video?: VideoTools;
+  /** Longest accepted video, in seconds. */
+  maxVideoSeconds?: number;
 }
 
 type EvidenceDoc = Record<string, any> & { _id: Types.ObjectId; complaint: Types.ObjectId; purpose: EvidencePurpose };
 
+/** Shown to the uploader. Deliberately general: the detailed signals are for staff only. */
+export const MEDIA_REJECTED_MESSAGE =
+  'This file looks AI-generated or edited, so it was not accepted. Please upload an original photo or video taken with your camera at the location.';
+
+function checkFile(bytes: Buffer, declaredType: string) {
+  // Trust only the bytes: real type from magic bytes, must match the declared Content-Type.
+  const sniffed = sniffMediaType(bytes);
+  if (!sniffed || !typesMatch(sniffed, declaredType)) throw new AppError('UNSUPPORTED_MEDIA_TYPE', 'Upload a JPEG, PNG, WebP, MP4 or MOV file whose content matches its type.');
+  const max = isVideoType(sniffed) ? MAX_VIDEO_BYTES : MAX_IMAGE_BYTES;
+  if (bytes.length === 0 || bytes.length > max) throw new AppError('PAYLOAD_TOO_LARGE', `Files must be at most ${max / 1024 / 1024} MB.`);
+  return sniffed;
+}
+
 export function createEvidenceService(deps: EvidenceServiceDeps) {
   const { storage } = deps;
+  const video = deps.video ?? disabledVideoTools;
+  const maxVideoSeconds = deps.maxVideoSeconds ?? DEFAULT_MAX_VIDEO_SECONDS;
+
+  /** Videos must be readable and short enough. Returns their details, or undefined without ffmpeg. */
+  async function checkVideo(bytes: Buffer, mediaType: string): Promise<VideoProbe | undefined> {
+    if (!isVideoType(mediaType) || !video.enabled) return undefined;
+    let probe: VideoProbe;
+    try {
+      probe = await video.probe(bytes);
+    } catch (err) {
+      if (err instanceof VideoProcessingError && err.kind === 'UNREADABLE') {
+        throw new AppError('UNSUPPORTED_MEDIA_TYPE', 'The video could not be read. Upload an MP4 or MOV recorded by a phone or camera.');
+      }
+      throw new AppError('SERVICE_UNAVAILABLE', 'Videos cannot be checked right now. Please try again shortly or upload a photo.');
+    }
+    if (probe.durationSec > maxVideoSeconds + 0.5) {
+      throw new AppError('PAYLOAD_TOO_LARGE', `Videos must be at most ${maxVideoSeconds} seconds long.`);
+    }
+    return probe;
+  }
 
   /** Who may add which kind of evidence, and when. Returns the related work order / dispute IDs to store. */
   async function authorizeUpload(p: Principal, complaint: { _id: Types.ObjectId; citizen: Types.ObjectId; status: string }, relation: string, input: UploadInput) {
@@ -82,6 +123,7 @@ export function createEvidenceService(deps: EvidenceServiceDeps) {
       contentType: e.contentType,
       sizeBytes: e.sizeBytes,
       sha256: e.sha256 ?? null,
+      durationSec: e.durationSec ?? null,
       caption: e.notes ?? null,
       // Staff never get the reporter's account ID (reporter identity is hidden from departments).
       uploadedBy: { id: viewerIsStaff && e._reporter === true ? null : String(e.uploadedBy), isReporter: e._reporter === true },
@@ -110,21 +152,37 @@ export function createEvidenceService(deps: EvidenceServiceDeps) {
   return {
     async upload(p: Principal, publicId: string, input: UploadInput, requestId: string) {
       const { complaintId, relation } = await deps.complaints.access(p, publicId);
-      const complaint = await Complaint.findById(complaintId).select('citizen status').lean();
+      const complaint = await Complaint.findById(complaintId).select('citizen status title description').lean();
       if (!complaint) throw notFoundError('The complaint');
       const links = await authorizeUpload(p, complaint, relation, input);
 
-      // Trust only the bytes: real type from magic bytes, must match the declared Content-Type.
-      const sniffed = sniffMediaType(input.bytes);
-      if (!sniffed || sniffed !== input.declaredType) throw new AppError('UNSUPPORTED_MEDIA_TYPE', 'Upload a JPEG, PNG, WebP or MP4 file whose content matches its type.');
-      const max = sniffed === 'video/mp4' ? MAX_VIDEO_BYTES : MAX_IMAGE_BYTES;
-      if (input.bytes.length === 0 || input.bytes.length > max) throw new AppError('PAYLOAD_TOO_LARGE', `Files must be at most ${max / 1024 / 1024} MB.`);
+      const sniffed = checkFile(input.bytes, input.declaredType);
       if ((await Evidence.countDocuments({ complaint: complaintId })) >= MAX_EVIDENCE_PER_COMPLAINT) {
         throw new AppError('CONFLICT', `A complaint can have at most ${MAX_EVIDENCE_PER_COMPLAINT} files.`);
       }
+      const probe = await checkVideo(input.bytes, sniffed);
+      const isVideo = isVideoType(sniffed);
 
-      // Capture time and GPS from the file itself (JPEG EXIF). Hints for verification, never proof.
-      const capture = sniffed === 'image/jpeg' ? readCaptureMetadata(input.bytes) : {};
+      // AI-generated or edited files are refused before anything is stored.
+      let screened: AuthenticityResult | undefined;
+      if (deps.screenUpload) {
+        const s = await deps.screenUpload(input.bytes, sniffed, { complaintTitle: complaint.title ?? '', complaintDescription: complaint.description ?? '' });
+        if (!s.allowed) {
+          await auditUserAction({
+            actor: p,
+            action: 'evidence.rejected',
+            targetType: 'Complaint',
+            targetId: complaintId,
+            requestId,
+            changes: [{ field: 'purpose', after: input.purpose }, { field: 'authenticity', after: s.result.outcome }],
+          });
+          throw new AppError('MEDIA_REJECTED', MEDIA_REJECTED_MESSAGE);
+        }
+        screened = s.result;
+      }
+
+      // Capture time and GPS from the file itself (JPEG EXIF, phone video tags). Hints for verification, never proof.
+      const capture = sniffed === 'image/jpeg' ? readCaptureMetadata(input.bytes) : probe ? { capturedAt: probe.capturedAt, location: probe.location } : {};
 
       const id = new Types.ObjectId();
       const key = `evidence/${String(complaintId)}/${String(id)}-${randomUUID()}.${EXTENSIONS[sniffed]}`;
@@ -138,7 +196,7 @@ export function createEvidenceService(deps: EvidenceServiceDeps) {
           workOrder: links.workOrder,
           dispute: links.dispute,
           uploadedBy: p.userId,
-          mediaType: sniffed === 'video/mp4' ? 'VIDEO' : 'IMAGE',
+          mediaType: isVideo ? 'VIDEO' : 'IMAGE',
           contentType: sniffed,
           sizeBytes: input.bytes.length,
           storageProvider: storage.name,
@@ -147,17 +205,33 @@ export function createEvidenceService(deps: EvidenceServiceDeps) {
           notes: input.caption,
           capturedAt: capture.capturedAt,
           captureLocation: capture.location ? { type: 'Point', coordinates: [capture.location.lng, capture.location.lat] } : undefined,
-          // Images get a shareable copy without metadata, with faces and number plates blurred.
-          redaction: { state: sniffed === 'video/mp4' ? 'NOT_SUPPORTED' : 'PENDING', updatedAt: new Date() },
+          durationSec: probe ? Math.round(probe.durationSec * 10) / 10 : undefined,
+          // Shareable copy without metadata, with faces and number plates blurred (videos need ffmpeg).
+          redaction: { state: isVideo && !video.enabled ? 'NOT_SUPPORTED' : 'PENDING', updatedAt: new Date() },
         });
       } catch (err) {
         await storage.delete(key).catch(() => undefined); // don't leave an orphan file
         throw err;
       }
       await auditUserAction({ actor: p, action: 'evidence.uploaded', targetType: 'Evidence', targetId: doc._id, requestId, changes: [{ field: 'purpose', after: input.purpose }, { field: 'sizeBytes', after: input.bytes.length }] });
-      if (deps.queueAnalysis) await deps.queueAnalysis(complaintId, doc._id, p.userId, input.purpose, sniffed === 'video/mp4' ? 'VIDEO' : 'IMAGE').catch((err) => deps.onQueueError?.(err));
+      if (deps.queueAnalysis) await deps.queueAnalysis(complaintId, doc._id, p.userId, input.purpose, isVideo ? 'VIDEO' : 'IMAGE', screened).catch((err) => deps.onQueueError?.(err));
       const lean = { ...(doc.toObject() as EvidenceDoc), _reporter: relation === 'reporter' };
-      return toView(lean, relation !== 'reporter', 'ANALYSIS_PENDING');
+      return toView(lean, relation !== 'reporter', screened?.outcome ?? 'ANALYSIS_PENDING');
+    },
+
+    /**
+     * Checks a file before the complaint exists (report form), so a citizen learns about a rejected
+     * photo before submitting. Stores nothing; the real upload repeats the check (cached, no extra AI call).
+     */
+    async precheck(p: Principal, bytes: Buffer, declaredType: string, requestId: string) {
+      const sniffed = checkFile(bytes, declaredType);
+      await checkVideo(bytes, sniffed);
+      if (!deps.screenUpload) return { allowed: true, message: null };
+      const s = await deps.screenUpload(bytes, sniffed, { complaintTitle: '', complaintDescription: '' });
+      if (!s.allowed) {
+        await auditUserAction({ actor: p, action: 'evidence.rejected', targetType: 'User', targetId: p.userId, requestId, changes: [{ field: 'authenticity', after: s.result.outcome }] });
+      }
+      return { allowed: s.allowed, message: s.allowed ? null : MEDIA_REJECTED_MESSAGE };
     },
 
     /** Metadata for a complaint's evidence. Reporter, staff of its department and admins only. */
@@ -194,8 +268,8 @@ export function createEvidenceService(deps: EvidenceServiceDeps) {
         if (hasCopy) {
           key = r.storageKey!;
           served = 'SHARED';
-        } else if (r.state === 'PENDING') throw new AppError('CONFLICT', 'This photo is still being prepared for sharing (faces and number plates are blurred first). Try again in a few seconds.');
-        else throw new AppError('CONFLICT', 'This photo could not be prepared for sharing.');
+        } else if (r.state === 'PENDING') throw new AppError('CONFLICT', 'This file is still being prepared for sharing (faces and number plates are blurred first). Try again in a few seconds.');
+        else throw new AppError('CONFLICT', 'This file could not be prepared for sharing.');
       }
       const bytes = await storage.get(key);
       await auditUserAction({
@@ -206,7 +280,9 @@ export function createEvidenceService(deps: EvidenceServiceDeps) {
         requestId,
         changes: [{ field: 'variant', after: served }],
       });
-      return { bytes, contentType: ev.contentType, variant: served, filename: `${String(ev._id)}${served === 'SHARED' ? '-shared' : ''}.${EXTENSIONS[ev.contentType] ?? 'bin'}` };
+      // A video's shareable copy is re-encoded as MP4, so its type can differ from the original's.
+      const contentType = served === 'SHARED' ? (r?.contentType ?? ev.contentType) : ev.contentType;
+      return { bytes, contentType, variant: served, filename: `${String(ev._id)}${served === 'SHARED' ? '-shared' : ''}.${EXTENSIONS[contentType] ?? 'bin'}` };
     },
   };
 }

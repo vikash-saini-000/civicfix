@@ -243,6 +243,8 @@ export interface OperationsApi {
 
   // Triage and routing
   getAnalysis(publicId: string, signal?: AbortSignal): Promise<ComplaintAnalysis>;
+  /** Platform admins: queue the AI triage (and duplicate check) again. */
+  rerunAnalysis(publicId: string, types?: ('TRIAGE' | 'DUPLICATE_CANDIDATES')[], signal?: AbortSignal): Promise<void>;
   listReviewQueue(signal?: AbortSignal): Promise<ReviewQueueItem[]>;
   assignComplaint(publicId: string, input: AssignComplaintInput, signal?: AbortSignal): Promise<WorkOrder>;
   classifyComplaint(publicId: string, input: ClassifyComplaintInput, signal?: AbortSignal): Promise<void>;

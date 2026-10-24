@@ -96,7 +96,7 @@ export function WorkOrderDetailPage() {
               showAuthenticity
               refreshKey={refreshKey}
               uploadPurpose={can('start') || can('block') || can('submit_resolution') ? 'WORK_PROGRESS' : undefined}
-              uploadLabel="Add a progress photo"
+              uploadLabel="Add a progress photo or video"
             />
           )}
           <History wo={wo} />
@@ -300,7 +300,7 @@ function ResolutionForm({ wo, onSubmitted }: { wo: WorkOrder; onSubmitted: (a: R
         publicId={wo.complaint!.publicId}
         title={`Resolution photos (${candidates.length} ready)`}
         uploadPurpose="RESOLUTION"
-        uploadLabel="Upload a resolution photo"
+        uploadLabel="Upload a resolution photo or video"
         filter={(e) => candidates.some((c) => c.id === e.id)}
         refreshKey={refreshKey}
         onUploaded={(e) => {

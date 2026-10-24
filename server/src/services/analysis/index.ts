@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { Types } from 'mongoose';
 import type { AiProvider } from '../../ai/types.js';
 import type { Principal } from '../../auth/roles.js';
@@ -5,7 +6,7 @@ import { AIAnalysis, Complaint, Department, Evidence, User } from '../../models/
 import { AppError, notFoundError } from '../../utils/errors.js';
 import type { Logger } from '../../utils/logger.js';
 import { relationTo, type ComplaintService } from '../complaints.js';
-import { analyzeMedia, mediaRecordFields } from './mediaAuthenticity.js';
+import { analyzeMedia, mediaRecordFields, type AuthenticityResult } from './mediaAuthenticity.js';
 import { createAnalysisRunner, JOB_TYPES, type JobType, type RunnerOptions } from './runner.js';
 
 export { JOB_TYPES, type JobType };
@@ -28,12 +29,45 @@ function jobView(a: AnalysisDoc) {
 
 export interface AnalysisServiceOptions extends Omit<RunnerOptions, 'logger'> {
   logger: Logger;
+  /** block (default) = refuse uploads flagged as AI-generated or edited; flag = store and mark for review. */
+  mediaUploadGate?: 'block' | 'flag';
+}
+
+/** Authenticity outcomes that stop an upload when the gate is `block`. */
+export const BLOCKED_MEDIA_OUTCOMES = new Set(['POTENTIAL_SYNTHETIC_MEDIA', 'POTENTIAL_MANIPULATION']);
+/** Results that won't change on retry; transient AI failures are not cached so a retry can run the check. */
+const STABLE_ERRORS = new Set([undefined, 'VIDEO_TOOLS_UNAVAILABLE', 'TOO_LARGE_FOR_VISUAL_MODEL', 'NOT_CONFIGURED']);
+const SCREEN_CACHE_MS = 30 * 60_000;
+const SCREEN_CACHE_MAX = 500;
+
+export interface ScreenResult {
+  allowed: boolean;
+  result: AuthenticityResult;
 }
 
 /** AI analysis facade: queueing, the staff-facing summary, and media authenticity for evidence. */
 export function createAnalysisService(opts: AnalysisServiceOptions) {
   const runner = createAnalysisRunner(opts);
   const provider: AiProvider = opts.provider;
+  const gate = opts.mediaUploadGate ?? 'block';
+  // Same bytes checked twice (pre-check, then the real upload) cost one model call.
+  const screenCache = new Map<string, { result: AuthenticityResult; at: number }>();
+
+  /** Authenticity check run before a file is stored. Throws AppError for unsupported/oversized files. */
+  async function screenMedia(bytes: Uint8Array, declaredType: string, context: { complaintTitle: string; complaintDescription: string }): Promise<ScreenResult> {
+    const key = `${declaredType}:${createHash('sha256').update(bytes).digest('hex')}`;
+    const hit = screenCache.get(key);
+    let result = hit && Date.now() - hit.at < SCREEN_CACHE_MS ? hit.result : undefined;
+    if (!result) {
+      result = await analyzeMedia(bytes, declaredType, context, provider, opts.video);
+      if (STABLE_ERRORS.has(result.visualErrorCode)) {
+        screenCache.delete(key);
+        screenCache.set(key, { result, at: Date.now() });
+        if (screenCache.size > SCREEN_CACHE_MAX) screenCache.delete(screenCache.keys().next().value!);
+      }
+    }
+    return { allowed: !(gate === 'block' && BLOCKED_MEDIA_OUTCOMES.has(result.outcome)), result };
+  }
 
   function requireStaff(relation: string) {
     if (relation === 'reporter') throw new AppError('FORBIDDEN', 'AI analysis is only available to department staff and administrators.');
@@ -169,10 +203,27 @@ export function createAnalysisService(opts: AnalysisServiceOptions) {
 
     /** Queues classification + duplicate check for a new complaint. */
     queueForNewComplaint: (complaintId: Types.ObjectId) => runner.enqueue(complaintId, JOB_TYPES, 'COMPLAINT_CREATED'),
-    async queueForEvidence(complaintId: Types.ObjectId, evidenceId: Types.ObjectId, requestedBy?: string, purpose?: string, mediaType?: string) {
-      // Privacy copy first, so staff can open the photo as soon as possible.
-      if (mediaType !== 'VIDEO') await runner.enqueueRedaction(complaintId, evidenceId, requestedBy);
-      const media = await runner.enqueueMedia(complaintId, evidenceId, requestedBy);
+    screenMedia,
+
+    async queueForEvidence(complaintId: Types.ObjectId, evidenceId: Types.ObjectId, requestedBy?: string, purpose?: string, mediaType?: string, screened?: AuthenticityResult) {
+      // Privacy copy first, so staff can open the file as soon as possible (videos need ffmpeg).
+      if (mediaType !== 'VIDEO' || opts.video?.enabled) await runner.enqueueRedaction(complaintId, evidenceId, requestedBy);
+      // Already checked at upload: store that result instead of paying for the same check again.
+      const media = screened
+        ? await AIAnalysis.create({
+            complaint: complaintId,
+            evidence: evidenceId,
+            analysisType: 'MEDIA_AUTHENTICITY',
+            analysisVersion: 1,
+            trigger: 'EVIDENCE_ADDED',
+            requestedBy,
+            attempts: 1,
+            status: 'SUCCEEDED',
+            startedAt: new Date(),
+            completedAt: new Date(),
+            ...mediaRecordFields(screened),
+          })
+        : await runner.enqueueMedia(complaintId, evidenceId, requestedBy);
       if (purpose === 'RESOLUTION') await runner.enqueueComparison(complaintId, evidenceId, requestedBy);
       return media;
     },
@@ -221,7 +272,7 @@ export function createAnalysisService(opts: AnalysisServiceOptions) {
         startedAt: new Date(),
       };
       try {
-        const result = await analyzeMedia(bytes, ev.contentType, { complaintTitle: complaint.title, complaintDescription: complaint.description }, provider);
+        const result = await analyzeMedia(bytes, ev.contentType, { complaintTitle: complaint.title, complaintDescription: complaint.description }, provider, opts.video);
         return await AIAnalysis.create({ ...base, status: 'SUCCEEDED', completedAt: new Date(), ...mediaRecordFields(result) });
       } catch (err) {
         const code = err instanceof AppError ? err.code : 'INTERNAL_ERROR';

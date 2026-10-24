@@ -140,7 +140,7 @@ export type EvidencePurpose = (typeof EVIDENCE_PURPOSES)[number];
 export const MEDIA_TYPES = ['IMAGE', 'VIDEO'] as const;
 export type MediaType = (typeof MEDIA_TYPES)[number];
 
-export const ALLOWED_CONTENT_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'video/mp4'] as const;
+export const ALLOWED_CONTENT_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'video/mp4', 'video/quicktime'] as const;
 
 export const EVIDENCE_VERIFICATION_STATES = ['PENDING', 'ACCEPTED', 'REJECTED', 'NEEDS_REVIEW'] as const;
 export type EvidenceVerificationState = (typeof EVIDENCE_VERIFICATION_STATES)[number];

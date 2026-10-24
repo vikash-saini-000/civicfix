@@ -1,10 +1,10 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
+import { ACCEPTED_MEDIA_TYPES, isVideoFile, MAX_IMAGE_BYTES, MAX_VIDEO_SECONDS, mediaFileError } from '../lib/media';
 import { Button } from './Button';
 
+/** Photos and videos per report. */
 export const MAX_PHOTOS = 3;
-export const MAX_PHOTO_BYTES = 10 * 1024 * 1024;
-/** Image types the backend accepts (checked again on the server from the file's bytes). */
-const ACCEPTED_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
+export const MAX_PHOTO_BYTES = MAX_IMAGE_BYTES;
 
 interface Props {
   files: File[];
@@ -37,15 +37,13 @@ export function PhotoInput({ files, onChange, onError, error, disabled = false, 
   function add(list: FileList | null) {
     if (!list || disabled) return;
     const selected = Array.from(list);
-    const invalidType = selected.find((file) => !ACCEPTED_TYPES.includes(file.type));
-    const invalidSize = selected.find((file) => file.size > MAX_PHOTO_BYTES);
+    const firstProblem = selected.map(mediaFileError).find(Boolean);
     const available = MAX_PHOTOS - files.length;
-    const validImages = selected.filter((file) => ACCEPTED_TYPES.includes(file.type) && file.size <= MAX_PHOTO_BYTES);
+    const valid = selected.filter((file) => !mediaFileError(file));
 
-    if (available > 0 && validImages.length > 0) onChange([...files, ...validImages.slice(0, available)]);
-    if (invalidType) reportError('Choose JPEG, PNG or WebP images only.');
-    else if (invalidSize) reportError('Each image must be 10 MB or smaller.');
-    else if (validImages.length > available) reportError(`You can attach up to ${MAX_PHOTOS} photos.`);
+    if (available > 0 && valid.length > 0) onChange([...files, ...valid.slice(0, available)]);
+    if (firstProblem) reportError(firstProblem);
+    else if (valid.length > available) reportError(`You can attach up to ${MAX_PHOTOS} photos or videos.`);
     else reportError(undefined);
     if (inputRef.current) inputRef.current.value = '';
   }
@@ -57,17 +55,20 @@ export function PhotoInput({ files, onChange, onError, error, disabled = false, 
   return (
     <div className="flex flex-col gap-2">
       <span id={`${id}-label`} className="text-[0.75rem] tracking-[0.02em] text-ink-muted">
-        Photos <span className="text-ink-subtle">(optional, up to {MAX_PHOTOS})</span>
+        Photos or videos <span className="text-ink-subtle">(optional, up to {MAX_PHOTOS})</span>
       </span>
-       <p id={helpId} className="text-[0.75rem] text-ink-muted">
-        JPEG, PNG or WebP, up to 10 MB each. Do not include private documents or unnecessary personal information.
+      <p id={helpId} className="text-[0.75rem] text-ink-muted">
+        Photos: JPEG, PNG or WebP up to 10 MB. Videos: MP4 or MOV up to 50 MB and {MAX_VIDEO_SECONDS} seconds. Do not include private documents or
+        unnecessary personal information.
       </p>
       {disabledReason && <p className="text-[0.75rem] text-ink-muted">{disabledReason}</p>}
       {files.length > 0 && (
         <ul className="grid max-w-md grid-cols-3 gap-2" aria-labelledby={`${id}-label`}>
           {files.map((file, index) => (
             <li key={`${file.name}-${file.size}-${index}`} className="relative border border-hairline bg-surface-1">
-              {previews[index] ? (
+              {previews[index] && isVideoFile(file) ? (
+                <video src={previews[index]} muted playsInline preload="metadata" aria-label={`Video ${index + 1}: ${file.name}`} className="aspect-square w-full bg-black object-cover" />
+              ) : previews[index] ? (
                 <img src={previews[index]} alt={`Photo ${index + 1}: ${file.name}`} className="aspect-square w-full object-cover" />
               ) : (
                 <p className="aspect-square p-2 text-[0.75rem] text-ink-muted">{file.name}</p>
@@ -93,7 +94,7 @@ export function PhotoInput({ files, onChange, onError, error, disabled = false, 
             ref={inputRef}
             id={id}
             type="file"
-            accept={ACCEPTED_TYPES.join(',')}
+            accept={ACCEPTED_MEDIA_TYPES.join(',')}
             multiple
             disabled={disabled}
             className="sr-only"
@@ -103,7 +104,7 @@ export function PhotoInput({ files, onChange, onError, error, disabled = false, 
             aria-invalid={Boolean(effectiveError)}
           />
           <Button variant="tertiary" size="sm" onClick={() => inputRef.current?.click()} disabled={disabled}>
-            {files.length ? 'Add another photo' : 'Add photos'}
+            {files.length ? 'Add another photo or video' : 'Add photos or videos'}
           </Button>
         </div>
       )}

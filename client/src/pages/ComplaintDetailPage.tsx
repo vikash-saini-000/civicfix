@@ -180,7 +180,7 @@ export function ComplaintDetailPage({ complaintApi = api }: ComplaintDetailPageP
             <EvidencePanel
               publicId={complaint.publicId}
               uploadPurpose={['CLOSED', 'REJECTED'].includes(complaint.status) ? undefined : 'ADDITIONAL'}
-              uploadLabel="Add another photo"
+              uploadLabel="Add another photo or video"
             />
           )}
           <ButtonLink to="/citizen/complaints" variant="ghost" className="self-start -ml-4">

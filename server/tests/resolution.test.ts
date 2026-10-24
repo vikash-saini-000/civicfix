@@ -13,6 +13,13 @@ import { createLogger } from '../src/utils/logger.js';
 import { jpegWithExif, testAuthConfig } from './helpers.js';
 import { readCaptureMetadata } from '../src/services/analysis/exif.js';
 import { testMongo } from './mongo.js';
+import { execFile } from 'node:child_process';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { promisify } from 'node:util';
+import { detectVideoTools, type VideoTools } from '../src/media/video.js';
+import type { PrivacyRegions } from '../src/ai/types.js';
 
 const silent = createLogger({ logLevel: 'silent', nodeEnv: 'test' });
 const PASSWORD = 'phase nine password';
@@ -35,9 +42,24 @@ const good: ClassificationOutput = {
 };
 const fixed: ResolutionComparison = { sameLocation: 'YES', issueAppearsFixed: 'YES', matchesCategory: 'YES', notes: 'Pothole filled; same kerb and pole.' };
 type ComparisonScript = ResolutionComparison | AiProviderError | ((input: ResolutionComparisonInput) => ResolutionComparison);
-function provider(image: ImageAssessment | AiProviderError = clean, comparison: ComparisonScript = fixed): AiProvider {
+let imageCalls = 0;
+let comparisonInputs: ResolutionComparisonInput[] = [];
+let privacyCalls = 0;
+function provider(image: ImageAssessment | AiProviderError = clean, comparison: ComparisonScript = fixed, privacy?: PrivacyRegions): AiProvider {
   return {
+    ...(privacy && {
+      async detectPrivacyRegions() {
+        privacyCalls++;
+        return { output: privacy, meta: { provider: 'fake', model: 'fake-1', promptVersion: 'v1', latencyMs: 1 } };
+      },
+      async assessVideo() {
+        imageCalls++;
+        if (image instanceof AiProviderError) throw image;
+        return { output: image, meta: { provider: 'fake', model: 'fake-1', promptVersion: 'v1', latencyMs: 1 } };
+      },
+    }),
     async compareResolution(input) {
+      comparisonInputs.push(input);
       if (comparison instanceof AiProviderError) throw comparison;
       const output = typeof comparison === 'function' ? comparison(input) : comparison;
       return { output, meta: { provider: 'fake', model: 'fake-1', promptVersion: 'v1', latencyMs: 1 } };
@@ -49,6 +71,7 @@ function provider(image: ImageAssessment | AiProviderError = clean, comparison: 
       return { output: good, meta: { provider: 'fake', model: 'fake-1', promptVersion: 'v1', latencyMs: 1 } };
     },
     async assessImage() {
+      imageCalls++;
       if (image instanceof AiProviderError) throw image;
       return { output: image, meta: { provider: 'fake', model: 'fake-1', promptVersion: 'v1', latencyMs: 1 } };
     },
@@ -70,9 +93,23 @@ afterAll(async () => {
 let analysis: AnalysisService;
 let app: ReturnType<typeof createApp>;
 let storage: ObjectStorage;
-function build(opts: { image?: ImageAssessment | AiProviderError; comparison?: ComparisonScript; policy?: Partial<VerificationPolicy>; storage?: ObjectStorage } = {}) {
+function build(
+  opts: {
+    image?: ImageAssessment | AiProviderError;
+    comparison?: ComparisonScript;
+    policy?: Partial<VerificationPolicy>;
+    storage?: ObjectStorage;
+    mediaGate?: 'block' | 'flag';
+    video?: VideoTools;
+    maxVideoSeconds?: number;
+    privacy?: PrivacyRegions;
+  } = {},
+) {
   storage = opts.storage ?? createMemoryStorage();
-  analysis = createAnalysisService({ provider: provider(opts.image, opts.comparison), logger: silent, maxAttempts: 1, autoRun: false, storage });
+  imageCalls = 0;
+  privacyCalls = 0;
+  comparisonInputs = [];
+  analysis = createAnalysisService({ provider: provider(opts.image, opts.comparison, opts.privacy), logger: silent, maxAttempts: 1, autoRun: false, storage, mediaUploadGate: opts.mediaGate, video: opts.video });
   app = createApp({
     config: { nodeEnv: 'test', corsOrigins: [], jsonBodyLimit: '100kb', auth: testAuthConfig },
     logger: silent,
@@ -84,6 +121,8 @@ function build(opts: { image?: ImageAssessment | AiProviderError; comparison?: C
     uploadLimit: many,
     analysis,
     storage,
+    video: opts.video,
+    maxVideoSeconds: opts.maxVideoSeconds,
     verificationPolicy: { ...DEFAULT_VERIFICATION_POLICY, ...opts.policy },
   });
 }
@@ -184,6 +223,62 @@ describe('evidence', () => {
     expect(await AuditLog.exists({ action: 'evidence.uploaded', targetId: e.id })).toBeTruthy();
   });
 
+  it('refuses AI-generated or edited files before storing anything, for citizens and workers', async () => {
+    const { c, wo } = await inProgress();
+    build({ image: { ...clean, visualInconsistency: 'STRONG', inconsistencyNotes: 'Flat illustration, not a photo.' } });
+    for (const [who, purpose] of [[alice, 'ADDITIONAL'], [worker, 'RESOLUTION']] as const) {
+      const res = await upload(c.publicId, who, purpose, jpegWithExif(site));
+      expect(res.status).toBe(422);
+      expect(res.body.error.code).toBe('MEDIA_REJECTED');
+      expect(res.body.error.message).not.toMatch(/illustration/i); // staff-only detail stays internal
+    }
+    expect(await Evidence.countDocuments()).toBe(0);
+    expect(await AuditLog.countDocuments({ action: 'evidence.rejected' })).toBe(2);
+    // Without accepted evidence the worker can't submit the resolution.
+    expect((await WorkOrder.findOne({ publicId: wo }).lean())!.status).toBe('IN_PROGRESS');
+  });
+
+  it('refuses files whose metadata declares an AI generator, even if they look clean', async () => {
+    const { c } = await inProgress();
+    const res = await upload(c.publicId, alice, 'ADDITIONAL', jpeg('http://cv.iptc.org/newscodes/digitalsourcetype/trainedAlgorithmicMedia'));
+    expect(res.status).toBe(422);
+    expect(await Evidence.countDocuments()).toBe(0);
+  });
+
+  it('stores the upload-time check as the authenticity result, without a second model call', async () => {
+    const { c } = await inProgress();
+    const before = imageCalls;
+    const res = await upload(c.publicId, alice, 'ADDITIONAL');
+    expect(res.status).toBe(201);
+    expect(await AIAnalysis.findOne({ analysisType: 'MEDIA_AUTHENTICITY', evidence: res.body.data.evidence.id }).lean()).toMatchObject({ status: 'SUCCEEDED', authenticity: { outcome: 'NO_SUSPICIOUS_SIGNALS_DETECTED' } });
+    await settle();
+    expect(imageCalls - before).toBe(1);
+  });
+
+  it('pre-checks a photo before the complaint exists, and reuses that result on upload', async () => {
+    const check = (bytes: Buffer) => request(app).post('/api/v1/evidence/check').set('Authorization', `Bearer ${alice.token}`).set('Content-Type', 'image/jpeg').send(bytes);
+    const photo = jpeg();
+    expect((await check(photo)).body.data).toEqual({ allowed: true, message: null });
+    const { c } = await inProgress();
+    const before = imageCalls;
+    expect((await upload(c.publicId, alice, 'ADDITIONAL', photo)).status).toBe(201);
+    expect(imageCalls).toBe(before);
+    expect((await request(app).post('/api/v1/evidence/check').set('Content-Type', 'image/jpeg').send(photo)).status).toBe(401);
+
+    build({ image: { ...clean, visualInconsistency: 'STRONG', inconsistencyNotes: 'Generated.' } });
+    const res = await check(jpeg());
+    expect(res.status).toBe(200);
+    expect(res.body.data).toMatchObject({ allowed: false, message: expect.stringMatching(/AI-generated or edited/) });
+    expect(await Evidence.countDocuments()).toBe(1);
+  });
+
+  it('with the gate set to flag, flagged files are stored and marked for review', async () => {
+    build({ image: { ...clean, visualInconsistency: 'STRONG', inconsistencyNotes: 'Cloned area.' }, mediaGate: 'flag' });
+    const { c } = await inProgress();
+    expect((await upload(c.publicId, alice, 'ADDITIONAL')).status).toBe(201);
+    expect((await call('get', `/complaints/${c.publicId}/evidence`, mgr)).body.data[0].authenticity).toBe('POTENTIAL_MANIPULATION');
+  });
+
   it('validates the real content, type and size', async () => {
     const { c } = await inProgress();
     expect((await upload(c.publicId, alice, 'ADDITIONAL', Buffer.from('hello'), 'text/plain')).status).toBe(415);
@@ -261,6 +356,104 @@ describe('evidence', () => {
 });
 
 // ---- resolution and verification -------------------------------------------------------------------------
+// ---- video evidence (real ffmpeg; skipped where it isn't installed) ----------------------------------------
+const videoTools = await detectVideoTools({ ffmpegPath: process.env.FFMPEG_PATH ?? 'ffmpeg', ffprobePath: process.env.FFPROBE_PATH ?? 'ffprobe' });
+describe.skipIf(!videoTools.enabled)('video evidence', { timeout: 120_000 }, () => {
+  let dir: string;
+  let n = 0;
+  beforeAll(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'civicfix-video-evidence-'));
+  });
+  afterAll(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+  beforeEach(async () => {
+    build({ video: videoTools, maxVideoSeconds: 10, privacy: { regions: [{ kind: 'FACE', x: 0.1, y: 0.1, width: 0.2, height: 0.3 }] } });
+    await seed();
+  });
+
+  /** A phone-style clip recorded at the complaint site. */
+  async function clip(opts: { seconds?: number; format?: 'mp4' | 'mov'; at?: { lat: number; lng: number } } = {}) {
+    const out = join(dir, `clip-${n++}.${opts.format ?? 'mp4'}`);
+    const at = opts.at ?? site;
+    const iso = `${at.lat >= 0 ? '+' : ''}${at.lat.toFixed(4)}${at.lng >= 0 ? '+' : ''}${at.lng.toFixed(4)}/`;
+    await promisify(execFile)(process.env.FFMPEG_PATH ?? 'ffmpeg', [
+      '-v', 'error', '-f', 'lavfi', '-i', `testsrc2=size=320x240:rate=15:duration=${opts.seconds ?? 3}`,
+      '-c:v', 'libx264', '-pix_fmt', 'yuv420p',
+      '-metadata', `creation_time=${new Date().toISOString()}`, '-metadata', `location=${iso}`, '-y', out,
+    ]);
+    return readFile(out);
+  }
+
+  it('accepts a phone video: stores length, capture time and GPS, checks it once, and shares a blurred MP4 copy', async () => {
+    const { c } = await inProgress();
+    const mov = await clip({ format: 'mov' });
+    const res = await upload(c.publicId, alice, 'ADDITIONAL', mov, 'video/quicktime');
+    expect(res.status).toBe(201);
+    const e = res.body.data.evidence;
+    expect(e).toMatchObject({ mediaType: 'VIDEO', contentType: 'video/quicktime', durationSec: 3 });
+    const doc = (await Evidence.findById(e.id).lean())!;
+    expect(doc.capturedAt).toBeInstanceOf(Date);
+    expect(doc.captureLocation!.coordinates[0]).toBeCloseTo(site.lng, 3);
+    expect(doc.captureLocation!.coordinates[1]).toBeCloseTo(site.lat, 3);
+    expect(imageCalls).toBe(1); // one video check at upload, reused for the stored result
+
+    await settle();
+    const after = (await Evidence.findById(e.id).lean())!;
+    expect(after.redaction).toMatchObject({ state: 'DONE', contentType: 'video/mp4', faces: 1 });
+    expect(after.redaction!.storageKey).toMatch(/\.shared\.mp4$/);
+    expect(privacyCalls).toBe(2); // ~every 2 s, at least 2 samples
+    expect(imageCalls).toBe(1);
+
+    const shared = await request(app).get(`/api/v1/evidence/${e.id}/content`).set('Authorization', `Bearer ${mgr.token}`).buffer(true).parse((r, cb) => {
+      const chunks: Buffer[] = [];
+      r.on('data', (d: Buffer) => chunks.push(d));
+      r.on('end', () => cb(null, Buffer.concat(chunks)));
+    });
+    expect(shared.status).toBe(200);
+    expect(shared.headers['content-type']).toBe('video/mp4');
+    const probe = await videoTools.probe(shared.body as Buffer);
+    expect(probe.location).toBeUndefined();
+    expect(probe.capturedAt).toBeUndefined();
+    expect((await call('get', `/complaints/${c.publicId}/evidence`, mgr)).body.data[0].authenticity).toBe('NO_SUSPICIOUS_SIGNALS_DETECTED');
+  });
+
+  it('refuses videos that are too long, unreadable, or look AI-generated, storing nothing', async () => {
+    const { c } = await inProgress();
+    const long = await upload(c.publicId, alice, 'ADDITIONAL', await clip({ seconds: 12 }), 'video/mp4');
+    expect(long.status).toBe(413);
+    expect(long.body.error.message).toMatch(/10 seconds/);
+    const junk = Buffer.concat([Buffer.from([0, 0, 0, 0x18]), Buffer.from('ftypisom'), Buffer.alloc(4000, 7)]);
+    expect((await upload(c.publicId, alice, 'ADDITIONAL', junk, 'video/mp4')).status).toBe(415);
+
+    build({ video: videoTools, image: { ...clean, visualInconsistency: 'STRONG', inconsistencyNotes: 'Objects morph.' }, privacy: { regions: [] } });
+    const fake = await upload(c.publicId, alice, 'ADDITIONAL', await clip(), 'video/mp4');
+    expect(fake.status).toBe(422);
+    expect(fake.body.error.code).toBe('MEDIA_REJECTED');
+    expect(await Evidence.countDocuments()).toBe(0);
+  });
+
+  it('a worker can resolve with a video; the before/after comparison uses video frames', async () => {
+    const { c, wo } = await inProgress();
+    expect((await upload(c.publicId, alice, 'ADDITIONAL', await clip(), 'video/mp4')).status).toBe(201);
+    const ev = await upload(c.publicId, worker, 'RESOLUTION', await clip(), 'video/mp4');
+    expect(ev.status).toBe(201);
+    await settle();
+    expect(comparisonInputs).toHaveLength(1);
+    expect(comparisonInputs[0]!.after.mediaType).toBe('image/jpeg');
+    expect(comparisonInputs[0]!.before).toHaveLength(1);
+    const res = await call('post', `/work-orders/${wo}/resolution`, worker, { completionNotes: 'Cleared the garbage and washed the area.', evidenceIds: [ev.body.data.evidence.id] });
+    expect(res.status).toBe(200);
+    expect(res.body.data.assessment, JSON.stringify(res.body.data.assessment)).toMatchObject({ outcome: 'SUFFICIENT' });
+  });
+
+  it('pre-checks a video before the complaint exists', async () => {
+    const res = await request(app).post('/api/v1/evidence/check').set('Authorization', `Bearer ${alice.token}`).set('Content-Type', 'video/mp4').send(await clip());
+    expect(res.status).toBe(200);
+    expect(res.body.data).toEqual({ allowed: true, message: null });
+  });
+});
+
 describe('resolution and verification', () => {
   beforeEach(async () => {
     build();
@@ -276,8 +469,8 @@ describe('resolution and verification', () => {
     expect(await AIAnalysis.exists({ analysisType: 'RESOLUTION_VERIFICATION', 'verification.outcome': 'SUFFICIENT' })).toBeTruthy();
   });
 
-  it('uncertain evidence goes to verification-required, even with auto-approval on', async () => {
-    build({ image: { ...clean, visualInconsistency: 'STRONG', inconsistencyNotes: 'Cloned patch.' }, policy: { autoApprove: true } });
+  it('uncertain evidence goes to verification-required, even with auto-approval on (gate set to flag)', async () => {
+    build({ image: { ...clean, visualInconsistency: 'STRONG', inconsistencyNotes: 'Cloned patch.' }, policy: { autoApprove: true }, mediaGate: 'flag' });
     await seed();
     const { c, wo } = await inProgress();
     const res = await submitWithEvidence(c.publicId, wo);

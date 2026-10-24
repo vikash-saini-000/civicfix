@@ -13,7 +13,9 @@ export type AiErrorKind =
   | 'REFUSED'
   | 'INVALID_OUTPUT'
   | 'BAD_REQUEST'
-  | 'AUTH_FAILED';
+  | 'AUTH_FAILED'
+  /** Prepaid balance or the API key's budget is used up (HTTP 402 / billing_error). Not retried. */
+  | 'CREDITS_EXHAUSTED';
 
 const RETRYABLE: ReadonlySet<AiErrorKind> = new Set(['TIMEOUT', 'RATE_LIMITED', 'UNAVAILABLE']);
 
@@ -111,6 +113,14 @@ export interface ImageAssessmentInput {
   complaintDescription: string;
 }
 
+/** Frames sampled from one video, in time order, checked together in one call (same answer shape as an image). */
+export interface VideoAssessmentInput {
+  frames: { mediaType: 'image/jpeg' | 'image/png' | 'image/webp'; base64: string; atSec: number }[];
+  durationSec: number;
+  complaintTitle: string;
+  complaintDescription: string;
+}
+
 // ---- privacy: faces and number plates ----------------------------------------------
 
 /** Box in relative coordinates (0-1 of width/height, origin top-left). */
@@ -190,6 +200,8 @@ export interface AiProvider {
   readonly enabled: boolean;
   classifyComplaint(input: ClassificationInput): Promise<AiResult<ClassificationOutput>>;
   assessImage(input: ImageAssessmentInput): Promise<AiResult<ImageAssessment>>;
+  /** Optional: authenticity/relevance of a video from sampled frames. Missing means the middle frame goes to assessImage. */
+  assessVideo?(input: VideoAssessmentInput): Promise<AiResult<ImageAssessment>>;
   /** Optional: bounded tool-calling loop. Providers without it use classifyComplaint for triage. */
   runAgent?<S extends z.ZodType>(input: AgentRunInput<S>): Promise<AgentResult<z.infer<S>>>;
   /** Optional: before/after photo comparison for resolution checks. Missing means "not checked". */
@@ -209,6 +221,7 @@ export const disabledProvider: AiProvider = {
   enabled: false,
   classifyComplaint: notConfigured,
   assessImage: notConfigured,
+  assessVideo: notConfigured,
   runAgent: notConfigured,
   compareResolution: notConfigured,
   detectPrivacyRegions: notConfigured,

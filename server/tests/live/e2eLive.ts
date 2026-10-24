@@ -6,6 +6,10 @@
 //   SEED_PASSWORD=… npm run e2e:live            (BASE_URL defaults to http://localhost:4000)
 // With AI_PROVIDER=anthropic this makes several real model calls (costs a few cents). It writes real records
 // (one new citizen account and one complaint per run) to the configured database.
+//
+// The bundled fixtures are drawings, and uploads that look AI-generated or edited are refused
+// (MEDIA_UPLOAD_GATE=block). The run checks that refusal, then needs two REAL camera JPEGs:
+//   E2E_BEFORE_PHOTO=path/to/before.jpg E2E_AFTER_PHOTO=path/to/after.jpg npm run e2e:live
 import { existsSync, readFileSync } from 'node:fs';
 import { jpegWithExif } from '../helpers.js';
 
@@ -17,6 +21,7 @@ if (!PASSWORD) {
   process.exit(1);
 }
 const SITE = { lat: 13.0072, lng: 74.7956 };
+const REAL = { before: process.env.E2E_BEFORE_PHOTO, after: process.env.E2E_AFTER_PHOTO };
 const AI_WAIT_MS = 180_000;
 
 // ---- tiny HTTP client --------------------------------------------------------------------------
@@ -65,7 +70,8 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /** A real JPEG with phone-style EXIF (GPS at the site, capture time now) spliced in after SOI. */
 function photo(file: string): Buffer {
-  const jpeg = readFileSync(new URL(`./fixtures/${file}`, import.meta.url));
+  const real = file === 'pothole-before.jpg' ? REAL.before : file === 'pothole-after.jpg' ? REAL.after : undefined;
+  const jpeg = readFileSync(real ?? new URL(`./fixtures/${file}`, import.meta.url));
   const d = new Date();
   const p = (n: number) => String(n).padStart(2, '0');
   const tz = -d.getTimezoneOffset();
@@ -79,6 +85,7 @@ function photo(file: string): Buffer {
 }
 const upload = (publicId: string, token: string, purpose: string, file: string, extra = '') =>
   call('POST', `/complaints/${publicId}/evidence?purpose=${purpose}${extra}`, token, undefined, { type: 'image/jpeg', data: photo(file) });
+const fixture = (file: string) => readFileSync(new URL(`./fixtures/${file}`, import.meta.url));
 
 /** Waits until no AI job for the complaint is pending or running (staff view of the analysis). */
 async function waitForAi(publicId: string, token: string, label: string) {
@@ -135,7 +142,14 @@ async function main() {
     'complaint created',
   )).complaint;
   console.log(`    ${complaint.publicId}`);
-  await ok(upload(complaint.publicId, citizen, 'COMPLAINT_REPORT', 'pothole-before.jpg'), 201, 'photo uploaded');
+  const drawn = await call('POST', `/complaints/${complaint.publicId}/evidence?purpose=COMPLAINT_REPORT`, citizen, undefined, { type: 'image/jpeg', data: fixture('pothole-before.jpg') });
+  check(drawn.status === 422 && drawn.body?.error?.code === 'MEDIA_REJECTED', 'drawn/AI-looking photo refused at upload', drawn.body);
+  if (!REAL.before || !REAL.after) {
+    console.log('\n  Set E2E_BEFORE_PHOTO and E2E_AFTER_PHOTO to real camera JPEGs to run the rest of the journey.');
+    process.exitCode = failures === 0 ? 0 : 1;
+    return;
+  }
+  await ok(upload(complaint.publicId, citizen, 'COMPLAINT_REPORT', 'pothole-before.jpg'), 201, 'real photo uploaded');
   check((await call('GET', `/complaints/${complaint.publicId}/analysis`, citizen)).status === 403, 'citizen cannot read AI analysis');
   check((await call('GET', `/complaints/${complaint.publicId}`, outsider)).status === 404, 'other department cannot see it');
 

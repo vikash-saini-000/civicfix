@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import type { VideoTools } from '../media/video.js';
 import type { Types } from 'mongoose';
 import type { EventBus } from '../events/bus.js';
 import type { RateLimitOptions } from '../middleware/rateLimit.js';
@@ -37,6 +38,8 @@ export type ApiDeps = AuthRouterDeps & {
   assignmentPolicy?: AssignmentPolicy;
   verificationPolicy?: VerificationPolicy;
   storage?: ObjectStorage;
+  video?: VideoTools;
+  maxVideoSeconds?: number;
 };
 
 /**
@@ -70,7 +73,10 @@ export function buildApi(deps: ApiDeps): { router: Router; uploads: Router } {
   const evidenceService = createEvidenceService({
     storage,
     complaints: complaintService,
-    queueAnalysis: (complaintId, evidenceId, by, purpose, mediaType) => analysisService.queueForEvidence(complaintId, evidenceId, by, purpose, mediaType),
+    queueAnalysis: (complaintId, evidenceId, by, purpose, mediaType, screened) => analysisService.queueForEvidence(complaintId, evidenceId, by, purpose, mediaType, screened),
+    screenUpload: (bytes, mediaType, context) => analysisService.screenMedia(bytes, mediaType, context),
+    video: deps.video,
+    maxVideoSeconds: deps.maxVideoSeconds,
     onQueueError: (err) => logger.error({ err: safeError(err) }, 'evidence analysis could not be queued'),
   });
   const resolutionService = createResolutionService({ events, complaints: complaintService, workOrders: workOrderService, policy: deps.verificationPolicy });

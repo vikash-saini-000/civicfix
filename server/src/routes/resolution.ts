@@ -53,6 +53,20 @@ export function evidenceUploadRouter(deps: { authService: AuthService; evidenceS
       sendCreated(res, { evidence }, evidence.contentUrl);
     },
   );
+  // Check a photo/video before the complaint is created (report form). Nothing is stored.
+  router.post(
+    '/evidence/check',
+    requireAuth(deps.authService),
+    createRateLimiter({ ...(deps.uploadLimit ?? DEFAULT_UPLOAD_LIMIT), keyPart: (req) => `check:${req.auth?.userId}` }),
+    express.raw({ type: [...ALLOWED_CONTENT_TYPES], limit: MAX_VIDEO_BYTES }),
+    async (req, res) => {
+      if (!Buffer.isBuffer(req.body) || req.body.length === 0) {
+        throw new AppError('UNSUPPORTED_MEDIA_TYPE', 'Send the file as the request body with Content-Type image/jpeg, image/png, image/webp or video/mp4.');
+      }
+      const declaredType = (req.get('content-type') ?? '').split(';')[0]!.trim().toLowerCase();
+      sendSuccess(res, await deps.evidenceService.precheck(req.auth!, req.body, declaredType, req.id));
+    },
+  );
   return router;
 }
 

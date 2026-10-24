@@ -3,7 +3,8 @@ import { geoPointSchema } from './common.js';
 import { ALLOWED_CONTENT_TYPES, EVIDENCE_PURPOSES, EVIDENCE_VERIFICATION_STATES, MEDIA_TYPES, REDACTION_STATES } from './enums.js';
 
 /**
- * Shareable copy of an image: metadata (EXIF GPS etc.) stripped, faces and number plates blurred.
+ * Shareable copy of an image or video: metadata (EXIF / MP4 GPS etc.) stripped, faces and number plates
+ * blurred. Videos are re-encoded as MP4, so the copy's contentType can differ from the original's.
  * The original stays for verification; downloads serve this copy to everyone but the uploader and admins.
  */
 const redactionSchema = new Schema(
@@ -20,6 +21,8 @@ const redactionSchema = new Schema(
 
 export const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 export const MAX_VIDEO_BYTES = 50 * 1024 * 1024;
+/** Default longest accepted video (MAX_VIDEO_SECONDS). Long clips cost more to check and blur. */
+export const DEFAULT_MAX_VIDEO_SECONDS = 60;
 
 type EvidenceThis = { purpose?: string; mediaType?: string; contentType?: string };
 
@@ -80,6 +83,8 @@ const evidenceSchema = new Schema(
     // From file metadata when available. Used for GPS and time consistency checks; not trusted on its own.
     capturedAt: { type: Date },
     captureLocation: { type: geoPointSchema },
+    /** Videos: length in seconds (from ffprobe). */
+    durationSec: { type: Number, min: 0 },
 
     notes: { type: String, trim: true, maxlength: 1000 },
     verificationState: { type: String, enum: EVIDENCE_VERIFICATION_STATES, required: true, default: 'PENDING' },
