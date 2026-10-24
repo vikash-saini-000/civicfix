@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { useNavigate } from 'react-router';
 import { api } from '../api';
 import { ApiError } from '../api/errors';
+import type { LocationDescription } from '../api/operationsTypes';
 import type { ComplaintApi } from '../api/types';
 import { Button } from '../components/Button';
 import { Card } from '../components/Card';
@@ -9,7 +10,8 @@ import { Select, TextArea, TextInput } from '../components/Field';
 import { Page } from '../components/Layout';
 import { LocationPicker } from '../components/LocationPicker';
 import { Notification } from '../components/Notification';
-import { MAX_PHOTO_BYTES, MAX_PHOTOS, PhotoInput } from '../components/PhotoInput';
+import { MAX_PHOTOS, PhotoInput } from '../components/PhotoInput';
+import { mediaFileError } from '../lib/media';
 import { CATEGORIES, isValidGeoPoint, type CategoryId, type GeoPoint } from '../lib/domain';
 
 export const TITLE_MAX = 120;
@@ -30,6 +32,7 @@ export function ReportPage({ complaintApi = api }: ReportPageProps) {
   const [category, setCategory] = useState<CategoryId | ''>('');
   const [landmark, setLandmark] = useState('');
   const [location, setLocation] = useState<GeoPoint | null>(null);
+  const [locationWords, setLocationWords] = useState<LocationDescription | null>(null);
   const [photos, setPhotos] = useState<File[]>([]);
   const [errors, setErrors] = useState<Errors>({});
   const [submitting, setSubmitting] = useState(false);
@@ -56,9 +59,9 @@ export function ReportPage({ complaintApi = api }: ReportPageProps) {
 
     if (!isValidGeoPoint(location)) nextErrors.location = 'Place a valid pin on the map so the team can find the issue.';
 
-    if (photos.length > MAX_PHOTOS) nextErrors.photos = `Attach no more than ${MAX_PHOTOS} images.`;
-    else if (photos.some((photo) => !photo.type.startsWith('image/'))) nextErrors.photos = 'Choose image files only.';
-    else if (photos.some((photo) => photo.size > MAX_PHOTO_BYTES)) nextErrors.photos = 'Each image must be 10 MB or smaller.';
+    const fileProblem = photos.map(mediaFileError).find(Boolean);
+    if (photos.length > MAX_PHOTOS) nextErrors.photos = `Attach no more than ${MAX_PHOTOS} photos or videos.`;
+    else if (fileProblem) nextErrors.photos = fileProblem;
     else if (!photoAttachmentsSupported && photos.length > 0) {
       nextErrors.photos = 'Photo uploads are not available for the configured backend yet.';
     }
@@ -92,8 +95,16 @@ export function ReportPage({ complaintApi = api }: ReportPageProps) {
         selectedCategory: category || null,
         photos: photoAttachmentsSupported ? photos : [],
       });
-       navigate(`/citizen/complaints/${created.publicId}`, { state: { justSubmitted: true } });
+      navigate(`/citizen/complaints/${created.publicId}`, {
+        state: { justSubmitted: true, photoUploadFailures: created.photoUploadFailures ?? 0 },
+      });
     } catch (error) {
+      if (error instanceof ApiError && error.code === 'MEDIA_REJECTED') {
+        // Nothing was saved: send the citizen back to swap the photo.
+        setErrors((current) => ({ ...current, photos: error.message }));
+        setStep('details');
+        return;
+      }
       setSubmitError(getSubmissionErrorMessage(error));
     } finally {
       submitInFlight.current = false;
@@ -175,7 +186,7 @@ export function ReportPage({ complaintApi = api }: ReportPageProps) {
                     optional
                     value={category}
                     onChange={(event) => setCategory(event.target.value as CategoryId | '')}
-                    helper="Not sure? Leave it blank. The backend can classify it later."
+                    helper="Not sure? Leave it blank and we will classify it."
                   >
                     <option value="">Not sure</option>
                     {CATEGORIES.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
@@ -205,6 +216,7 @@ export function ReportPage({ complaintApi = api }: ReportPageProps) {
                       setLocation(point);
                       updateFieldError('location');
                     }}
+                    onDescribed={setLocationWords}
                     error={errors.location}
                   />
                 </fieldset>
@@ -228,6 +240,11 @@ export function ReportPage({ complaintApi = api }: ReportPageProps) {
                         : 'Photo uploads are pending the backend media contract. You can still submit the issue and location.'
                     }
                   />
+                  {photoAttachmentsSupported && (
+                    <p className="text-[0.875rem] text-ink-muted">
+                      Use original photos or videos taken at the location. They are checked when you submit, and AI-generated or edited files are not accepted.
+                    </p>
+                  )}
                 </fieldset>
               </Card>
 
@@ -249,7 +266,11 @@ export function ReportPage({ complaintApi = api }: ReportPageProps) {
                   <dt className="text-ink-muted">Title</dt><dd>{title.trim()}</dd>
                   <dt className="text-ink-muted">Description</dt><dd className="whitespace-pre-line">{description.trim()}</dd>
                   <dt className="text-ink-muted">Category</dt><dd>{category ? CATEGORIES.find((item) => item.id === category)?.label : 'Not chosen'}</dd>
-                  <dt className="text-ink-muted">Location</dt><dd className="font-mono">{location?.lat.toFixed(5)}, {location?.lng.toFixed(5)}</dd>
+                  <dt className="text-ink-muted">Location</dt>
+                  <dd>
+                    {locationWords?.address && <span className="block">{locationWords.address}</span>}
+                    <span className="font-mono text-ink-muted">{location?.lat.toFixed(5)}, {location?.lng.toFixed(5)}</span>
+                  </dd>
                   {landmark.trim() && <><dt className="text-ink-muted">Landmark</dt><dd>{landmark.trim()}</dd></>}
                   <dt className="text-ink-muted">Photos</dt><dd>{photos.length || 'None'}</dd>
                 </dl>
@@ -271,7 +292,8 @@ export function ReportPage({ complaintApi = api }: ReportPageProps) {
           <ol className="flex list-decimal flex-col gap-3 pl-5 text-ink-muted">
             <li>Your report is saved with a reference number.</li>
             <li>The civic team reviews the details and location.</li>
-            <li>Later stages may classify and route the report.</li>
+            <li>AI suggests a category and team; a person confirms when unsure.</li>
+            <li>The team fixes it, and the fix is checked before it is marked resolved.</li>
           </ol>
           <p className="mt-6 text-[0.75rem] text-ink-muted">
             In an emergency involving fire, injury, or a live electric wire, call <strong className="text-ink">112</strong> first.

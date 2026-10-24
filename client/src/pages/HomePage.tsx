@@ -1,7 +1,7 @@
 
 
 import { useState, type FormEvent, type ReactNode } from 'react';
-import { useNavigate } from 'react-router';
+import { Link, useNavigate } from 'react-router';
 import { Button, ButtonLink } from '../components/Button';
 import { TextInput } from '../components/Field';
 import { PageMeta } from '../components/PageMeta';
@@ -101,7 +101,10 @@ export function HomePage() {
                 See how it works
               </a>
             </div>
-            <p className="mt-5 max-w-[34rem] text-[0.8125rem] text-ink-muted">
+            <p className="mt-5 text-[0.875rem] text-ink-muted">
+              New here? <Link to="/register">Create a free citizen account</Link> to report and follow your complaints.
+            </p>
+            <p className="mt-3 max-w-[34rem] text-[0.8125rem] text-ink-muted">
               Not sure where to start? Include what you saw, where you saw it and when it happened. That is enough to
               begin.
             </p>

@@ -1,6 +1,7 @@
 import type { Complaint, ComplaintPriority, NewComplaintInput } from '../lib/domain';
 import type { DepartmentContext } from '../auth/department';
 import type { AuthApi } from './authTypes';
+import type { OperationsApi } from './operationsTypes';
 
 /** Authorized, citizen-safe data needed by the tracking UI. Swap implementation in ./index.ts. */
 export interface ComplaintApi {
@@ -13,7 +14,11 @@ export interface ComplaintApi {
 /** Read-only staff data. Visibility and authorization remain backend responsibilities. */
 export interface StaffComplaint extends Complaint {
   departmentName: string;
+  departmentId?: string;
   priority: ComplaintPriority | null;
+  /** Pseudonym shown to staff instead of the reporter's identity. */
+  reporterAlias?: string;
+  spamCheck?: { score: number; signals: string[] } | null;
 }
 
 export interface DepartmentApi {
@@ -21,11 +26,7 @@ export interface DepartmentApi {
   getDepartmentComplaint(context: DepartmentContext, publicId: string, signal?: AbortSignal): Promise<StaffComplaint | null>;
 }
 
-/**
- * Platform-wide data is intentionally a separate capability. The current
- * mock adapter can expose its complete demo dataset to the protected admin
- * route; the HTTP adapter fails closed until a backend contract exists.
- */
+/** Platform-wide complaint list (GET /complaints?scope=all, platform admins only). */
 export interface PlatformComplaint extends Complaint {
   departmentName: string | null;
   priority: ComplaintPriority | null;
@@ -36,8 +37,10 @@ export interface PlatformAnalyticsApi {
 }
 
 export interface ComplaintApiCapabilities {
-  /** True only when the adapter has an approved media-upload contract. */
+  /** True when the adapter can upload evidence files. */
   readonly photoAttachments: boolean;
+  /** True when the adapter talks to the real backend workflows (work orders, review, notifications). */
+  readonly operations?: boolean;
 }
 
-export interface CivicFixApi extends ComplaintApi, DepartmentApi, PlatformAnalyticsApi, AuthApi {}
+export interface CivicFixApi extends ComplaintApi, DepartmentApi, PlatformAnalyticsApi, AuthApi, OperationsApi {}

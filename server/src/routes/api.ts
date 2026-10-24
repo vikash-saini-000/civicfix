@@ -1,4 +1,7 @@
 import { Router } from 'express';
+import type { Geocoder } from '../services/geocode.js';
+import { createCaptureSessions } from '../services/captureSessions.js';
+import type { VideoTools } from '../media/video.js';
 import type { Types } from 'mongoose';
 import type { EventBus } from '../events/bus.js';
 import type { RateLimitOptions } from '../middleware/rateLimit.js';
@@ -37,6 +40,12 @@ export type ApiDeps = AuthRouterDeps & {
   assignmentPolicy?: AssignmentPolicy;
   verificationPolicy?: VerificationPolicy;
   storage?: ObjectStorage;
+  video?: VideoTools;
+  maxVideoSeconds?: number;
+  /** In-app camera policy. Default: gallery files allowed, sessions available. */
+  capture?: { mode: 'camera' | 'any'; sessionTtlSeconds: number };
+  /** Street addresses for map points. Default: disabled (ward and nearby place only). */
+  geocoder?: Geocoder;
 };
 
 /**
@@ -60,6 +69,7 @@ export function buildApi(deps: ApiDeps): { router: Router; uploads: Router } {
   let reevaluate: (id: Types.ObjectId) => Promise<unknown> = async () => undefined;
   const complaintService = createComplaintService({
     onCreated: (id) => analysisService.queueForNewComplaint(id),
+    lookupAddress: deps.geocoder?.enabled ? (lat, lng) => deps.geocoder!.streetAddress(lat, lng) : undefined,
     onFollowUpAnswered: (id) => analysisService.queueAfterFollowUp(id),
     onUnlinked: (id) => reevaluate(id),
     onHookError: (err) => deps.onHookError?.(err),
@@ -70,7 +80,12 @@ export function buildApi(deps: ApiDeps): { router: Router; uploads: Router } {
   const evidenceService = createEvidenceService({
     storage,
     complaints: complaintService,
-    queueAnalysis: (complaintId, evidenceId, by, purpose, mediaType) => analysisService.queueForEvidence(complaintId, evidenceId, by, purpose, mediaType),
+    queueAnalysis: (complaintId, evidenceId, by, purpose, mediaType, screened) => analysisService.queueForEvidence(complaintId, evidenceId, by, purpose, mediaType, screened),
+    screenUpload: (bytes, mediaType, context) => analysisService.screenMedia(bytes, mediaType, context),
+    video: deps.video,
+    maxVideoSeconds: deps.maxVideoSeconds,
+    captureMode: deps.capture?.mode ?? 'any',
+    captureSessions: createCaptureSessions({ secret: deps.authConfig.jwtSecret, ttlSeconds: deps.capture?.sessionTtlSeconds ?? 1800 }),
     onQueueError: (err) => logger.error({ err: safeError(err) }, 'evidence analysis could not be queued'),
   });
   const resolutionService = createResolutionService({ events, complaints: complaintService, workOrders: workOrderService, policy: deps.verificationPolicy });
@@ -97,7 +112,7 @@ export function buildApi(deps: ApiDeps): { router: Router; uploads: Router } {
   router.use('/audit-logs', auditLogsRouter({ authService }));
   router.use('/dashboard', dashboardsRouter({ authService, dashboardService: createDashboardService() }));
   router.use('/analytics', analyticsRouter({ authService, analyticsService: createAnalyticsService() }));
-  router.use('/geo', geoRouter({ authService }));
+  router.use('/geo', geoRouter({ authService, geocoder: deps.geocoder }));
 
   const uploads = evidenceUploadRouter({ authService, evidenceService, uploadLimit: deps.uploadLimit });
   return { router, uploads };

@@ -53,6 +53,8 @@ export interface ComplaintView {
   description: string;
   location: { lat: number; lng: number };
   landmark: string | null;
+  /** Street address looked up by the server; null if unknown. */
+  address: string | null;
   ward: { id: string; code: string; name: string } | null;
   selectedCategory: Category | null;
   confirmedCategory: Category | null;
@@ -90,6 +92,7 @@ type ComplaintDoc = {
   description: string;
   location: { coordinates: number[] };
   landmark?: string | null;
+  address?: string | null;
   selectedCategory?: Category | null;
   confirmedCategory?: Category | null;
   department?: Types.ObjectId | { _id: Types.ObjectId; name: string } | null;
@@ -140,6 +143,7 @@ function toView(p: Principal, c: ComplaintDoc, relation: Relation): ComplaintVie
     description: c.description,
     location: { lat: c.location.coordinates[1]!, lng: c.location.coordinates[0]! },
     landmark: c.landmark ?? null,
+    address: c.address ?? null,
     ward: ward ? { id: String(ward._id), code: ward.code, name: ward.name } : null,
     selectedCategory: c.selectedCategory ?? null,
     confirmedCategory: c.confirmedCategory ?? null,
@@ -214,6 +218,8 @@ const notFound = () => notFoundError('The complaint');
 export interface ComplaintServiceHooks {
   /** Called after a complaint is stored (e.g. to queue AI analysis). Errors are logged, never surfaced. */
   onCreated?: (complaintId: Types.ObjectId) => Promise<unknown>;
+  /** Street address for a new complaint's location (best effort; capped at a few seconds). */
+  lookupAddress?: (lat: number, lng: number) => Promise<string | null>;
   /** Called after the reporter answers follow-up questions while the complaint is still in triage. */
   onFollowUpAnswered?: (complaintId: Types.ObjectId) => Promise<unknown>;
   /** Called after a duplicate link is removed, so routing can be evaluated again. */
@@ -222,7 +228,23 @@ export interface ComplaintServiceHooks {
   events?: EventBus;
 }
 
+/** Longest a submission waits for the address lookup (it is usually cached from the report form). */
+const ADDRESS_WAIT_MS = 3000;
+
 export function createComplaintService(hooks: ComplaintServiceHooks = {}) {
+  async function addressFor(point: { lat: number; lng: number }): Promise<string | null> {
+    if (!hooks.lookupAddress) return null;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<null>((resolve) => {
+      timer = setTimeout(() => resolve(null), ADDRESS_WAIT_MS);
+    });
+    try {
+      return await Promise.race([hooks.lookupAddress(point.lat, point.lng).catch(() => null), timeout]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   /** Loads a complaint and the caller's relation to it, or 404 if it doesn't exist or isn't visible. */
   async function loadVisible(p: Principal, publicId: string) {
     const c = (await Complaint.findOne({ publicId }).populate([...POPULATE]).lean()) as ComplaintDoc | null;
@@ -261,8 +283,8 @@ export function createComplaintService(hooks: ComplaintServiceHooks = {}) {
     async create(p: Principal, input: CreateComplaintInput, requestId: string): Promise<ComplaintView> {
       const year = new Date().getUTCFullYear();
       const location = { type: 'Point' as const, coordinates: [input.location.lng, input.location.lat] };
-      // Ward and spam signals are server-side facts; neither can be set by the client.
-      const [ward, spam] = await Promise.all([resolveWard(location), checkSpam(p.userId, { ...input, location })]);
+      // Ward, address and spam signals are server-side facts; none can be set by the client.
+      const [ward, spam, address] = await Promise.all([resolveWard(location), checkSpam(p.userId, { ...input, location }), addressFor(input.location)]);
       const seq = await nextSequence(`complaint-${year}`);
       const now = new Date();
       const complaint = await Complaint.create({
@@ -274,6 +296,7 @@ export function createComplaintService(hooks: ComplaintServiceHooks = {}) {
         description: input.description,
         location,
         landmark: input.landmark,
+        address: address ?? undefined,
         selectedCategory: input.selectedCategory ?? undefined,
         status: 'REPORTED',
         statusHistory: [{ status: 'REPORTED', at: now }],

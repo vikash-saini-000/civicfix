@@ -9,6 +9,10 @@ export const ERROR_CODES = {
   CONFLICT: 409,
   PAYLOAD_TOO_LARGE: 413,
   UNSUPPORTED_MEDIA_TYPE: 415,
+  /** The upload check found signs the photo/video is AI-generated or edited; nothing was stored. */
+  MEDIA_REJECTED: 422,
+  /** The file was not taken with the in-app camera (EVIDENCE_CAPTURE=camera), or its camera stamp is invalid. */
+  CAPTURE_REQUIRED: 422,
   RATE_LIMITED: 429,
   INTERNAL_ERROR: 500,
   SERVICE_UNAVAILABLE: 503,

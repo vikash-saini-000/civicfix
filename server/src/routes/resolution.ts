@@ -7,6 +7,7 @@ import { input, validate } from '../middleware/validate.js';
 import { ALLOWED_CONTENT_TYPES, DISPUTE_CATEGORIES, DISPUTE_STATUSES, EVIDENCE_PURPOSES } from '../models/enums.js';
 import { MAX_VIDEO_BYTES } from '../models/Evidence.js';
 import type { EvidenceService } from '../services/evidence.js';
+import type { CaptureStampInput } from '../services/captureSessions.js';
 import type { ResolutionService } from '../services/resolution.js';
 import { sendCreated, sendSuccess } from '../utils/respond.js';
 import { AppError } from '../utils/errors.js';
@@ -25,6 +26,16 @@ const uploadQuery = z.strictObject({
 
 export const DEFAULT_UPLOAD_LIMIT: RateLimitOptions = { windowMs: 60 * 60_000, limit: 60 };
 
+/** Raw upload types. WebM (browser recordings) is accepted on the wire and converted to MP4 before storage. */
+const UPLOAD_TYPES = [...ALLOWED_CONTENT_TYPES, 'video/webm'];
+
+/** In-app camera stamp sent with a captured file. */
+function captureHeaders(req: express.Request): CaptureStampInput | undefined {
+  const token = req.get('x-capture-token');
+  if (!token) return undefined;
+  return { token: token.slice(0, 2000), capturedAt: req.get('x-captured-at'), lat: req.get('x-capture-lat'), lng: req.get('x-capture-lng'), accuracy: req.get('x-capture-accuracy') };
+}
+
 /**
  * Upload route. Takes the raw file as the request body (Content-Type: image/jpeg | image/png |
  * image/webp | video/mp4), so it is mounted before the JSON-only check. Size is capped while
@@ -36,7 +47,7 @@ export function evidenceUploadRouter(deps: { authService: AuthService; evidenceS
     '/complaints/:publicId/evidence',
     requireAuth(deps.authService),
     createRateLimiter({ ...(deps.uploadLimit ?? DEFAULT_UPLOAD_LIMIT), keyPart: (req) => req.auth?.userId }),
-    express.raw({ type: [...ALLOWED_CONTENT_TYPES], limit: MAX_VIDEO_BYTES }),
+    express.raw({ type: UPLOAD_TYPES, limit: MAX_VIDEO_BYTES }),
     validate({ params: complaintParams, query: uploadQuery }),
     async (req, res) => {
       if (!Buffer.isBuffer(req.body) || req.body.length === 0) {
@@ -47,10 +58,37 @@ export function evidenceUploadRouter(deps: { authService: AuthService; evidenceS
       const evidence = await deps.evidenceService.upload(
         req.auth!,
         publicId,
-        { purpose: q.purpose, caption: q.caption, disputeId: q.disputeId, bytes: req.body, declaredType: (req.get('content-type') ?? '').split(';')[0]!.trim().toLowerCase() },
+        { purpose: q.purpose, caption: q.caption, disputeId: q.disputeId, bytes: req.body, declaredType: (req.get('content-type') ?? '').split(';')[0]!.trim().toLowerCase(), capture: captureHeaders(req) },
         req.id,
       );
       sendCreated(res, { evidence }, evidence.contentUrl);
+    },
+  );
+  // Check a photo/video before the complaint is created (report form). Nothing is stored.
+  router.post(
+    '/evidence/check',
+    requireAuth(deps.authService),
+    createRateLimiter({ ...(deps.uploadLimit ?? DEFAULT_UPLOAD_LIMIT), keyPart: (req) => `check:${req.auth?.userId}` }),
+    express.raw({ type: UPLOAD_TYPES, limit: MAX_VIDEO_BYTES }),
+    async (req, res) => {
+      if (!Buffer.isBuffer(req.body) || req.body.length === 0) {
+        throw new AppError('UNSUPPORTED_MEDIA_TYPE', 'Send the file as the request body with Content-Type image/jpeg, image/png, image/webp or video/mp4.');
+      }
+      const declaredType = (req.get('content-type') ?? '').split(';')[0]!.trim().toLowerCase();
+      sendSuccess(res, await deps.evidenceService.precheck(req.auth!, req.body, declaredType, req.id, captureHeaders(req)));
+    },
+  );
+  // Capture rules for the app (camera only or gallery allowed, longest video).
+  router.get('/evidence/capture-policy', requireAuth(deps.authService), (_req, res) => {
+    sendSuccess(res, deps.evidenceService.capturePolicy());
+  });
+  // Opens an in-app camera session. No body.
+  router.post(
+    '/evidence/capture-sessions',
+    requireAuth(deps.authService),
+    createRateLimiter({ ...(deps.uploadLimit ?? DEFAULT_UPLOAD_LIMIT), keyPart: (req) => `camera:${req.auth?.userId}` }),
+    (req, res) => {
+      sendCreated(res, deps.evidenceService.startCaptureSession(req.auth!), '/api/v1/evidence/capture-policy');
     },
   );
   return router;

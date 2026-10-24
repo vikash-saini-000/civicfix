@@ -450,7 +450,7 @@ describe('Anthropic adapter: agent loop', () => {
           throw new Anthropic.APIError(402, { type: 'error', error: { type: 'billing_error', message: 'Insufficient balance' } }, 'no funds', new Headers());
         },
       ]),
-    ).toMatchObject({ kind: 'BAD_REQUEST', retryable: false });
+    ).toMatchObject({ kind: 'CREDITS_EXHAUSTED', retryable: false });
   });
 
   it('nudges once when the model stops without calling the final tool', async () => {

@@ -64,6 +64,8 @@ const complaintSchema = new Schema(
     description: { type: String, required: true, trim: true, minlength: 10, maxlength: 2000 },
     location: { type: geoPointSchema, required: true },
     landmark: { type: String, trim: true, maxlength: 120 },
+    // Street address for the location, looked up by the server (OpenStreetMap) at submission. Display only.
+    address: { type: String, trim: true, maxlength: 300 },
     selectedCategory: { type: String, enum: CATEGORIES },
     // Ward containing the location, resolved by the server at submission (unset if outside every ward).
     ward: { type: Schema.Types.ObjectId, ref: 'Ward' },

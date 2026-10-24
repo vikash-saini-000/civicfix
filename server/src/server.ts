@@ -1,5 +1,7 @@
 // Process entry point: load config, connect to MongoDB, then start HTTP. Exits non-zero on startup failure.
 import { existsSync } from 'node:fs';
+import { createGeocoder } from './services/geocode.js';
+import { detectVideoTools } from './media/video.js';
 import { createServer } from 'node:http';
 import { createAnthropicProvider } from './ai/anthropicProvider.js';
 import { createOpenAiCompatibleEmbeddings, disabledEmbeddings } from './ai/embeddings.js';
@@ -53,6 +55,9 @@ async function main() {
     config.ai.embeddingModel && config.ai.baseURL && config.ai.apiKey
       ? createOpenAiCompatibleEmbeddings({ baseURL: config.ai.baseURL, apiKey: config.ai.apiKey, model: config.ai.embeddingModel, timeoutMs: config.ai.timeoutMs })
       : disabledEmbeddings;
+  // Video frames, details and privacy copies need ffmpeg; without it videos get metadata-only checks.
+  const video = await detectVideoTools({ ffmpegPath: config.video.ffmpegPath, ffprobePath: config.video.ffprobePath });
+  if (!video.enabled) logger.warn('ffmpeg/ffprobe not found: videos will only get metadata checks (set FFMPEG_PATH / FFPROBE_PATH)');
   const events = createEventBus(logger);
   const sla = createSlaMonitor({ events, logger });
   const analysis = createAnalysisService({
@@ -63,15 +68,21 @@ async function main() {
     autoRun: true,
     storage,
     triageMode: config.ai.triageMode,
+    mediaUploadGate: config.ai.mediaUploadGate,
+    video,
     agentMaxTurns: config.ai.agentMaxTurns,
     callTimeoutMs: config.ai.timeoutMs,
   });
-  logger.info({ aiProvider: provider.name, aiGateway: provider.enabled ? (config.ai.baseURL ? 'aicredits' : 'anthropic') : undefined, aiModel: provider.enabled ? provider.model : undefined, aiTriageMode: provider.enabled ? config.ai.triageMode : undefined, embeddings: embeddings.enabled ? embeddings.model : 'disabled', storage: config.storage.provider }, 'analysis configured');
+  logger.info({ aiProvider: provider.name, aiGateway: provider.enabled ? (config.ai.baseURL ? 'aicredits' : 'anthropic') : undefined, aiModel: provider.enabled ? provider.model : undefined, aiTriageMode: provider.enabled ? config.ai.triageMode : undefined, embeddings: embeddings.enabled ? embeddings.model : 'disabled', storage: config.storage.provider, video: video.version ?? 'disabled', uploadGate: config.ai.mediaUploadGate, evidenceCapture: config.capture.mode }, 'analysis configured');
 
   const app = createApp({
     analysis,
     events,
     storage,
+    video,
+    maxVideoSeconds: config.video.maxSeconds,
+    capture: config.capture,
+    geocoder: createGeocoder(config.geocode, logger),
     verificationPolicy: { ...DEFAULT_VERIFICATION_POLICY, autoApprove: config.verification.autoApprove, disputeWindowDays: config.verification.disputeWindowDays },
     config,
     logger,
@@ -83,7 +94,8 @@ async function main() {
   // Close kept-alive sockets a little before typical proxy timeouts.
   server.keepAliveTimeout = 5_000;
   server.headersTimeout = 10_000;
-  server.requestTimeout = 30_000;
+  // Long enough for a 50 MB video upload plus its authenticity check (ffmpeg + one model call).
+  server.requestTimeout = 120_000;
 
   const lifecycle = createShutdown({
     server,

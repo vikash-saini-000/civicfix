@@ -1,4 +1,6 @@
 import cors from 'cors';
+import type { Geocoder } from './services/geocode.js';
+import type { VideoTools } from './media/video.js';
 import express, { Router, type Express } from 'express';
 import helmet from 'helmet';
 import type { Config } from './config/env.js';
@@ -44,6 +46,13 @@ export interface AppDeps extends HealthDeps {
   verificationPolicy?: VerificationPolicy;
   /** Evidence file storage. Defaults to disabled (uploads answer 503). */
   storage?: ObjectStorage;
+  /** ffmpeg tools for video uploads. Defaults to disabled (videos stored with metadata-only checks). */
+  video?: VideoTools;
+  maxVideoSeconds?: number;
+  /** In-app camera policy (EVIDENCE_CAPTURE). Defaults to gallery files allowed. */
+  capture?: { mode: 'camera' | 'any'; sessionTtlSeconds: number };
+  /** Street addresses for map points (GEOCODER). Default: disabled. */
+  geocoder?: Geocoder;
   uploadLimit?: RateLimitOptions;
 }
 
@@ -111,6 +120,10 @@ export function createApp(deps: AppDeps): Express {
         assignmentPolicy: deps.assignmentPolicy,
         verificationPolicy: deps.verificationPolicy,
         storage: deps.storage,
+        video: deps.video,
+        maxVideoSeconds: deps.maxVideoSeconds,
+        capture: deps.capture,
+        geocoder: deps.geocoder,
         uploadLimit: deps.uploadLimit,
       });
   if (routers.uploads) api.use(routers.uploads);

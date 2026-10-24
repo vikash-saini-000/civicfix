@@ -46,6 +46,7 @@ export function createOpenAiCompatibleEmbeddings(cfg: { baseURL: string; apiKey:
         throw new AiProviderError('UNAVAILABLE', 'Could not reach the embedding provider.');
       }
       if (res.status === 401 || res.status === 403) throw new AiProviderError('AUTH_FAILED', 'The embedding provider rejected the credentials.');
+      if (res.status === 402) throw new AiProviderError('CREDITS_EXHAUSTED', 'AI credits are exhausted (balance or API key budget).');
       if (res.status === 429) throw new AiProviderError('RATE_LIMITED', 'The embedding provider rate-limited the request.');
       if (res.status >= 500 || res.status === 408) throw new AiProviderError('UNAVAILABLE', `The embedding provider returned ${res.status}.`);
       if (!res.ok) throw new AiProviderError('BAD_REQUEST', `The embedding provider returned ${res.status}.`);

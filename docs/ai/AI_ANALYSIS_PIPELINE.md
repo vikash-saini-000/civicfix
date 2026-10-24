@@ -16,7 +16,7 @@ staff / admin ─────▶ GET /complaints/:publicId/analysis  (safe summa
 admin ─────────────▶ POST /complaints/:publicId/analysis (re-run)
 ```
 
-Media authenticity runs as a background job (`MEDIA_AUTHENTICITY`) for **every uploaded evidence file** (Phase 9): the runner reads the bytes from storage and stores the result. Resolution verification treats flagged, unfinished or inconclusive checks as `UNCERTAIN`. When both TRIAGE and DUPLICATE_CANDIDATES finish, the Phase 8 rules decide whether to assign automatically ([ASSIGNMENTS_WORK_ORDERS.md](../api/ASSIGNMENTS_WORK_ORDERS.md)).
+Media authenticity runs **at upload, before the file is stored** (the upload gate, `MEDIA_UPLOAD_GATE`): files flagged as AI-generated or edited are refused with `422 MEDIA_REJECTED`, and the result of an accepted file is stored as its `MEDIA_AUTHENTICITY` record (no second call). The background `MEDIA_AUTHENTICITY` job is only used when a file arrives without an upload-time result. Resolution verification treats flagged, unfinished or inconclusive checks as `UNCERTAIN`. When both TRIAGE and DUPLICATE_CANDIDATES finish, the Phase 8 rules decide whether to assign automatically ([ASSIGNMENTS_WORK_ORDERS.md](../api/ASSIGNMENTS_WORK_ORDERS.md)).
 
 ## 2. Provider abstraction
 
@@ -94,10 +94,10 @@ All limits live in `DEFAULT_DUPLICATE_SETTINGS` (`duplicates.ts`). `similarity` 
 
 | Signal | How | Limits |
 |---|---|---|
-| File format | Magic bytes must be JPEG, PNG, WebP or MP4 **and** match the declared type; size ≤ 10 MB (image) / 50 MB (video) | Declared MIME type alone is never trusted |
+| File format | Magic bytes must be JPEG, PNG, WebP, MP4 or MOV **and** match the declared type (WebM recordings are converted to MP4 first); size ≤ 10 MB (image) / 50 MB (video), videos ≤ `MAX_VIDEO_SECONDS` | Declared MIME type alone is never trusted |
 | Provenance (C2PA) | Detects a C2PA/JUMBF manifest in the file | **Presence only.** Signatures are not verified (no C2PA library integrated), so the result is `PRESENT_UNVERIFIED`, never "verified". Absence is neutral. |
-| Metadata | Scans the first 512 KB for IPTC "trainedAlgorithmicMedia" and similar, generator names (Midjourney, DALL·E, Stable Diffusion, Firefly…) and editor names (Photoshop, GIMP, Snapseed…) | Metadata is easily stripped or forged; editing software is common and not suspicious alone |
-| Visual model | Claude looks at the image for signs of generation or alteration (`NONE_OBSERVED` / `SOME` / `STRONG`) and, separately, relevance | Not a forensic detector; images > 5 MB and **all videos** are skipped (no frame extraction: ffmpeg isn't integrated) |
+| Metadata | Scans the first and last 512 KB (plus ffprobe tags for videos) for IPTC "trainedAlgorithmicMedia" and similar, generator names (Midjourney, DALL·E, Stable Diffusion, Firefly, Sora, Runway, Pika, Kling, Veo…) and editor names (Photoshop, GIMP, Snapseed, CapCut, InShot, Premiere…) | Metadata is easily stripped or forged; editing software is common and not suspicious alone (except in `strict` mode) |
+| Visual model | Claude looks at the image for signs of generation or alteration (`NONE_OBSERVED` / `SOME` / `STRONG`) and, separately, relevance. **Videos:** 4 frames from across the clip go in one call (`assessVideo`, prompt `video-v2`), which also looks for morphing between frames and still images being zoomed/panned | Not a forensic detector; images > 5 MB are skipped; videos need ffmpeg |
 
 **Outcomes** (stored in `authenticity.outcome`; the API also derives `NOT_ANALYZED` and `ANALYSIS_PENDING`):
 
@@ -106,14 +106,24 @@ All limits live in `DEFAULT_DUPLICATE_SETTINGS` (`duplicates.ts`). `similarity` 
 | `POTENTIAL_SYNTHETIC_MEDIA` | Metadata declares AI generation or names a generator |
 | `POTENTIAL_MANIPULATION` | Strong visual inconsistency, or editor tag plus some inconsistency |
 | `NO_SUSPICIOUS_SIGNALS_DETECTED` | The visual model ran, saw nothing, and no metadata signals. **Not proof the image is genuine.** |
-| `INCONCLUSIVE` | Everything else: weak or mixed signals, visual model not run or failed, video |
+| `INCONCLUSIVE` | Everything else: weak or mixed signals, visual model not run or failed, video without ffmpeg |
 | `ANALYSIS_FAILED` | Unsupported or mismatched file, or an internal error |
 
-`reviewRecommended` is true only for the two `POTENTIAL_*` outcomes. **No outcome rejects, hides or deprioritizes a complaint**, and evidence `verificationState` is untouched. A human review workflow for these flags comes with Phase 9.
+`reviewRecommended` is true only for the two `POTENTIAL_*` outcomes.
+
+**Upload gate** (`MEDIA_UPLOAD_GATE`):
+
+| Gate | Refused at upload |
+|---|---|
+| `strict` | Both `POTENTIAL_*` outcomes, **and** files with any "some signs" visual finding or an editing-app tag |
+| `block` (default) | Both `POTENTIAL_*` outcomes |
+| `flag` | Nothing; flagged files are stored and marked for review |
+
+A refused upload stores nothing and is audited as `evidence.rejected`. If the AI is unavailable the check is `INCONCLUSIVE` and the file is allowed (marked for review). No outcome rejects or hides the *complaint* itself.
 
 ## 5a. Before/after comparison (resolution evidence)
 
-Every `RESOLUTION` photo also gets a `RESOLUTION_COMPARISON` job. Claude sees up to two of the citizen's own photos (`COMPLAINT_REPORT` / `ADDITIONAL`) as BEFORE and the submitted photo as AFTER, plus the complaint text and category, and answers `sameLocation`, `issueAppearsFixed` and `matchesCategory` (`YES` / `NO` / `UNCLEAR`) with a short note. Videos and images over 5 MB are recorded as `NOT_COMPARABLE`. One request carries at most 6 MB of image bytes (gateways such as AiCredits cap bodies at 10 MB). The result only feeds the verification rules ([EVIDENCE_VERIFICATION_DISPUTES.md](../api/EVIDENCE_VERIFICATION_DISPUTES.md) §2), where it can make the outcome more cautious but never approve. Staff see it per file under `analysis.media[].comparison`.
+Every `RESOLUTION` photo also gets a `RESOLUTION_COMPARISON` job. Claude sees up to two of the citizen's own photos (`COMPLAINT_REPORT` / `ADDITIONAL`) as BEFORE and the submitted photo as AFTER, plus the complaint text and category, and answers `sameLocation`, `issueAppearsFixed` and `matchesCategory` (`YES` / `NO` / `UNCLEAR`) with a short note. Videos are compared through their middle frame (needs ffmpeg); images over 5 MB are recorded as `NOT_COMPARABLE`. One request carries at most 6 MB of image bytes (gateways such as AiCredits cap bodies at 10 MB). The result only feeds the verification rules ([EVIDENCE_VERIFICATION_DISPUTES.md](../api/EVIDENCE_VERIFICATION_DISPUTES.md) §2), where it can make the outcome more cautious but never approve. Staff see it per file under `analysis.media[].comparison`.
 
 Uploads also read **capture time and GPS from JPEG EXIF** (`services/analysis/exif.ts`, no dependency, bounds-checked, first 512 KB only) into `Evidence.capturedAt` / `captureLocation`. These are uploader-controlled hints; they are never returned by evidence APIs.
 
@@ -132,7 +142,9 @@ Uploads also read **capture time and GPS from JPEG EXIF** (`services/analysis/ex
 - One classification call per complaint (plus re-runs) in `single` mode; up to `AI_AGENT_MAX_TURNS` calls in `agent` mode (typically 3–4). Low effort. Bounded output (`max_tokens` 4096).
 - One comparison call per resolution photo, in addition to its authenticity call.
 - Duplicate checks make no provider calls.
-- Images are sent to the model only if ≤ 5 MB; videos never are.
+- Images are sent to the model only if ≤ 5 MB. A video costs one authenticity call (4 frames), up to 12 privacy-detection calls (one per sampled frame) and, for resolution videos, one comparison call.
+- The upload-time check is cached by file hash for 30 minutes, so the report form's pre-check and the real upload cost one call.
+- Out-of-credit or over-budget gateway responses (HTTP 402 / `billing_error`) are recorded as `CREDITS_EXHAUSTED` and not retried; admins can use **Re-run AI** once credits are topped up.
 - Creation is limited to 20 complaints per user per hour; re-runs to 30 per admin per hour; one active job per complaint + type.
 - Token usage per call is stored (`usage.inputTokens` / `outputTokens`) for cost tracking. It isn't exposed by the API.
 
@@ -195,7 +207,7 @@ Response:
 - The agent doesn't ask the citizen follow-up questions; missing details are stored in `missingInformation` for staff.
 - Photo GPS is often stripped by phones and browsers; without it the verifier can't confirm the location and a human must check (`requireCaptureLocation`). EXIF is read from JPEG only, and EXIF times usually lack a time zone (14 h slack).
 - The before/after comparison describes what is visible; it can't judge whether a repair is safe or durable.
-- Authenticity: no C2PA signature verification, no dedicated forensic detector, no video frame analysis. The visual model is a heuristic reviewer, not a deepfake detector. No reliability figures exist for it here.
+- Authenticity: no C2PA signature verification, no dedicated forensic detector; videos are judged from 4 sampled frames. The visual model is a heuristic reviewer, not a deepfake detector. No reliability figures exist for it here.
 - Duplicate detection is lexical: it misses paraphrases with no shared words, and may pair different issues at the same spot. Embedding-based similarity (e.g. Voyage AI) can be added behind the same function later.
 - The AI's suggestion is not yet applied by any assignment policy; Phase 8 decides when a suggestion may auto-route.
 - Media analysis is wired to nothing until uploads exist (Phase 9).

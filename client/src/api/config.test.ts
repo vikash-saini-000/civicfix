@@ -3,8 +3,8 @@ import { ApiConfigError } from './errors';
 import { resolveApiConfig, resolveAuthConfig } from './config';
 
 describe('API configuration', () => {
-  it('defaults development to mock mode and production to HTTP mode', () => {
-    expect(resolveApiConfig({}, true)).toMatchObject({ mode: 'mock', baseUrl: '' });
+  it('defaults to the real backend (HTTP mode) in development and production', () => {
+    expect(resolveApiConfig({}, true)).toMatchObject({ mode: 'http', baseUrl: '' });
     expect(resolveApiConfig({}, false)).toMatchObject({ mode: 'http', baseUrl: '' });
   });
 

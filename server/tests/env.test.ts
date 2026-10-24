@@ -28,8 +28,11 @@ describe('loadConfig', () => {
       dbServerSelectionTimeoutMs: 10_000,
       trustProxyHops: 0,
       auth: { jwtSecret: JWT, accessTokenTtlSeconds: 900, refreshTokenTtlDays: 7, cookieSecure: false, cookieSameSite: 'lax' },
-      ai: { provider: 'disabled', apiKey: undefined, model: 'claude-opus-5-5', timeoutMs: 30_000, maxAttempts: 3, triageMode: 'single', agentMaxTurns: 6, embeddingModel: null },
+      ai: { provider: 'disabled', apiKey: undefined, model: 'claude-opus-5-5', timeoutMs: 30_000, maxAttempts: 3, triageMode: 'single', mediaUploadGate: 'block', agentMaxTurns: 6, embeddingModel: null },
       storage: { provider: 'disabled', localDir: './uploads' },
+      video: { ffmpegPath: 'ffmpeg', ffprobePath: 'ffprobe', maxSeconds: 60 },
+      capture: { mode: 'camera', sessionTtlSeconds: 1800 },
+      geocode: { provider: 'nominatim', url: 'https://nominatim.openstreetmap.org', userAgent: 'CivicFix/0.1 (civic complaint platform)' },
       verification: { autoApprove: false, disputeWindowDays: 14 },
     });
   });
@@ -131,6 +134,7 @@ describe('ai config', () => {
         timeoutMs: 30_000,
         maxAttempts: 3,
         triageMode: 'single',
+        mediaUploadGate: 'block',
         agentMaxTurns: 6,
         embeddingModel: 'text-embedding-3-small',
       });

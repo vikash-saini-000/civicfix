@@ -1,12 +1,10 @@
-import type { CategoryId, Complaint, ComplaintStatus, StatusEvent } from '../lib/domain';
+import type { CategoryId, Complaint, ComplaintStatus, FollowUp, StatusEvent } from '../lib/domain';
 import { ApiError } from './errors';
+import type { PlatformComplaint, StaffComplaint } from './types';
 
 /**
- * Normalize the citizen-safe complaint shape at the API boundary.
- *
- * The HTTP endpoint is still provisional, so the UI must not pass arbitrary
- * response objects through to citizen pages. Internal assignment and priority
- * fields are intentionally not copied here.
+ * Normalize the backend complaint view (docs/api/COMPLAINTS.md) at the API boundary, so pages never
+ * receive arbitrary response objects. Citizen views never copy department or priority fields.
  */
 export function parseComplaintList(value: unknown): Complaint[] {
   if (!Array.isArray(value)) throw invalidResponse();
@@ -14,34 +12,77 @@ export function parseComplaintList(value: unknown): Complaint[] {
 }
 
 export function parseComplaint(value: unknown): Complaint {
-  if (!isRecord(value)) throw invalidResponse();
+  const record = unwrapComplaint(value);
 
-  const publicId = requiredString(value.publicId);
-  const title = requiredString(value.title);
-  const description = requiredString(value.description);
-  const status = requiredString(value.status) as ComplaintStatus;
-  const createdAt = requiredTimestamp(value.createdAt);
-  const updatedAt = requiredTimestamp(value.updatedAt);
-  const location = parseLocation(value.location);
+  const publicId = requiredString(record.publicId);
+  const title = requiredString(record.title);
+  const description = requiredString(record.description);
+  const status = requiredString(record.status) as ComplaintStatus;
+  const createdAt = requiredTimestamp(record.createdAt);
+  const updatedAt = requiredTimestamp(record.updatedAt);
+  const location = parseLocation(record.location);
 
   if (!publicId || !title || !description || !createdAt || !updatedAt || !location) throw invalidResponse();
 
-  return {
+  const complaint: Complaint = {
     publicId,
     title,
     description,
     location,
-    ...(optionalString(value.landmark) ? { landmark: optionalString(value.landmark) } : {}),
-    selectedCategory: parseCategory(value.selectedCategory),
-    confirmedCategory: parseCategory(value.confirmedCategory),
+    ...(optionalString(record.landmark) ? { landmark: optionalString(record.landmark) } : {}),
+    ...(optionalString(record.address) ? { address: optionalString(record.address) } : {}),
+    selectedCategory: parseCategory(record.selectedCategory),
+    confirmedCategory: parseCategory(record.confirmedCategory),
     status,
-    ...(optionalNonNegativeInteger(value.photoCount) !== undefined
-      ? { photoCount: optionalNonNegativeInteger(value.photoCount) }
+    ...(optionalNonNegativeInteger(record.photoCount) !== undefined
+      ? { photoCount: optionalNonNegativeInteger(record.photoCount) }
       : {}),
     createdAt,
     updatedAt,
-    history: parseHistory(value.history),
+    // The backend calls it statusHistory; older drafts used history.
+    history: parseHistory(record.statusHistory ?? record.history),
+    rejectionReason: optionalString(record.rejectionReason) ?? null,
+    resolvedAt: requiredTimestamp(record.resolvedAt),
+    closedAt: requiredTimestamp(record.closedAt),
+    followUp: parseFollowUp(record.followUp),
+    duplicateOf: parseDuplicateOf(record.duplicateOf),
+    linkedReportCount: optionalNonNegativeInteger(record.linkedReportCount) ?? 0,
+    allowedActions: Array.isArray(record.allowedActions) ? record.allowedActions.filter((a): a is string => typeof a === 'string') : [],
   };
+  return complaint;
+}
+
+/** Staff view: adds department, priority and the reporter pseudonym. */
+export function parseStaffComplaint(value: unknown): StaffComplaint {
+  const record = unwrapComplaint(value);
+  const base = parseComplaint(record);
+  const department = isRecord(record.department) ? optionalString(record.department.name) : undefined;
+  const reporter = isRecord(record.reporter) ? optionalString(record.reporter.alias) : undefined;
+  const spam = isRecord(record.spamCheck) && typeof record.spamCheck.score === 'number'
+    ? { score: record.spamCheck.score, signals: Array.isArray(record.spamCheck.signals) ? record.spamCheck.signals.filter((s): s is string => typeof s === 'string') : [] }
+    : null;
+  return {
+    ...base,
+    departmentName: department ?? 'Not routed yet',
+    ...(isRecord(record.department) && typeof record.department.id === 'string' ? { departmentId: record.department.id } : {}),
+    priority: optionalString(record.priority) ?? null,
+    ...(reporter ? { reporterAlias: reporter } : {}),
+    spamCheck: spam,
+  };
+}
+
+export function parsePlatformComplaint(value: unknown): PlatformComplaint {
+  const record = unwrapComplaint(value);
+  const staff = parseStaffComplaint(record);
+  const departmentName = isRecord(record.department) ? optionalString(record.department.name) ?? null : null;
+  return { ...staff, departmentName };
+}
+
+/** Single-resource responses wrap the complaint as `{ complaint: {...} }`. */
+function unwrapComplaint(value: unknown): Record<string, unknown> {
+  if (!isRecord(value)) throw invalidResponse();
+  if (isRecord(value.complaint) && !('publicId' in value)) return value.complaint;
+  return value;
 }
 
 function parseHistory(value: unknown): StatusEvent[] {
@@ -56,6 +97,26 @@ function parseHistory(value: unknown): StatusEvent[] {
     const note = optionalString(event.note);
     return { status: status as ComplaintStatus, at, ...(note ? { note } : {}) };
   });
+}
+
+function parseFollowUp(value: unknown): FollowUp | null {
+  if (!isRecord(value) || !Array.isArray(value.questions)) return null;
+  const askedAt = requiredTimestamp(value.askedAt);
+  if (!askedAt) return null;
+  return {
+    questions: value.questions.filter((q): q is string => typeof q === 'string'),
+    answers: Array.isArray(value.answers) ? value.answers.filter((a): a is string => typeof a === 'string') : [],
+    askedAt,
+    answeredAt: requiredTimestamp(value.answeredAt),
+  };
+}
+
+function parseDuplicateOf(value: unknown): Complaint['duplicateOf'] {
+  if (!isRecord(value)) return null;
+  const publicId = requiredString(value.publicId);
+  const linkedAt = requiredTimestamp(value.linkedAt);
+  if (!publicId || !linkedAt) return null;
+  return { publicId, status: (requiredString(value.status) ?? 'UNDER_REVIEW') as ComplaintStatus, linkedAt };
 }
 
 function parseCategory(value: unknown): CategoryId | null {

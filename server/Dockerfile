@@ -10,6 +10,8 @@ RUN npm run build
 FROM node:24-alpine AS runtime
 ENV NODE_ENV=production
 WORKDIR /app
+# ffmpeg/ffprobe: video frames, details and privacy copies for video evidence.
+RUN apk add --no-cache ffmpeg
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev && npm cache clean --force
 COPY --from=build /app/dist ./dist

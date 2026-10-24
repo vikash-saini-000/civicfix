@@ -3,9 +3,11 @@ import { ApiError } from '../api/errors';
 
 export type ComplaintSort = 'updated-desc' | 'created-desc' | 'title-asc';
 
-export function complaintLocationLabel(complaint: Pick<Complaint, 'location' | 'landmark'>): string {
+export function complaintLocationLabel(complaint: Pick<Complaint, 'location' | 'landmark' | 'address'>): string {
   const landmark = complaint.landmark?.trim();
-  if (landmark) return landmark;
+  const address = complaint.address?.trim();
+  if (landmark && address) return `${landmark} · ${address}`;
+  if (landmark || address) return (landmark || address)!;
   const { lat, lng } = complaint.location ?? {};
   if (Number.isFinite(lat) && Number.isFinite(lng)) return `${lat.toFixed(4)}, ${lng.toFixed(4)}`;
   return 'Location unavailable';

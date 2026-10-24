@@ -58,7 +58,7 @@ export function createMockApi(options: MockApiOptions = {}): ComplaintApi & Depa
   }
 
   return {
-    capabilities: { photoAttachments: true },
+    capabilities: { photoAttachments: true, operations: false },
     async listMyComplaints(signal) {
       await delay(latencyMs, signal);
       return complaints.map(toCitizenComplaint).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));

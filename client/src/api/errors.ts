@@ -16,6 +16,7 @@ export class ApiConfigError extends Error {
 }
 
 export function getUserFacingApiMessage(error: unknown, fallback = 'We could not complete that request.') {
+  if (error instanceof ApiError && error.code === 'BACKEND_REQUIRED') return error.message;
   if (error instanceof ApiError && error.status >= 500) {
     return 'The service is temporarily unavailable. Please try again.';
   }

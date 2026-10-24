@@ -60,19 +60,39 @@ export interface StatusEvent {
   note?: string; // citizen-facing note only
 }
 
+export interface FollowUp {
+  questions: string[];
+  answers: string[];
+  askedAt: string;
+  answeredAt: string | null;
+}
+
 export interface Complaint {
   publicId: string;
   title: string;
   description: string;
   location: GeoPoint;
   landmark?: string;
+  /** Street address looked up by the server (OpenStreetMap) when the complaint was submitted. */
+  address?: string | null;
   selectedCategory: CategoryId | null;
   confirmedCategory: CategoryId | null;
   status: ComplaintStatus;
   photoCount?: number;
+  /** Set by the HTTP adapter when some photos could not be uploaded after the report was saved. */
+  photoUploadFailures?: number;
   createdAt: string;
   updatedAt: string;
   history?: StatusEvent[];
+  /** Fields below come from the backend complaint view (docs/api/COMPLAINTS.md). */
+  rejectionReason?: string | null;
+  resolvedAt?: string | null;
+  closedAt?: string | null;
+  followUp?: FollowUp | null;
+  duplicateOf?: { publicId: string; status: ComplaintStatus; linkedAt: string } | null;
+  linkedReportCount?: number;
+  /** UI hint only; the server re-checks every action. */
+  allowedActions?: string[];
 }
 
 export interface NewComplaintInput {

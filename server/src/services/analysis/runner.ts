@@ -23,6 +23,7 @@ import type { ImageData } from '../../ai/types.js';
 import { disabledEmbeddings, type EmbeddingProvider } from '../../ai/embeddings.js';
 import { adjustPriority, contextForPrompt, DEFAULT_PRIORITY_POLICY, locationContext, type PriorityPolicy } from '../location.js';
 import { redactImage, type RedactionRegion } from './redaction.js';
+import { disabledVideoTools, sampleTimes, VideoProcessingError, type TimedRegion, type VideoTools } from '../../media/video.js';
 import type { Priority, ReviewReason } from '../../models/enums.js';
 
 export const JOB_TYPES = ['TRIAGE', 'DUPLICATE_CANDIDATES'] as const;
@@ -46,6 +47,8 @@ class DeferJob extends Error {
 
 /** Total raw image bytes in one comparison request (about 8 MB once base64-encoded). */
 const MAX_COMPARISON_BYTES = 6 * 1024 * 1024;
+/** Most frames checked for faces/plates in one video (one model call each). */
+const MAX_PRIVACY_FRAMES = 12;
 
 export const TRIAGE_MODES = ['single', 'agent'] as const;
 export type TriageMode = (typeof TRIAGE_MODES)[number];
@@ -72,6 +75,8 @@ export interface RunnerOptions {
   callTimeoutMs?: number;
   /** Capacity rule shared with automatic assignment. */
   maxOpenPerMember?: number;
+  /** ffmpeg tools for video frames, details and privacy copies. Disabled = videos get metadata-only checks. */
+  video?: VideoTools;
   /** Semantic duplicate search. Disabled = word-overlap only. */
   embeddings?: EmbeddingProvider;
   priorityPolicy?: PriorityPolicy;
@@ -88,8 +93,9 @@ export function createAnalysisRunner(opts: RunnerOptions) {
   const triageMode: TriageMode = opts.triageMode ?? 'single';
   const agentMaxTurns = opts.agentMaxTurns ?? 6;
   const callTimeoutMs = opts.callTimeoutMs ?? 30_000;
-  // The lease must outlast a whole agent run, or another worker could pick the job up mid-run.
-  const leaseMs = opts.leaseMs ?? Math.max(90_000, triageMode === 'agent' ? (agentMaxTurns + 1) * callTimeoutMs : 0);
+  const video = opts.video ?? disabledVideoTools;
+  // The lease must outlast a whole agent run (or a video privacy copy), or another worker could pick the job up mid-run.
+  const leaseMs = opts.leaseMs ?? Math.max(video.enabled ? 240_000 : 90_000, triageMode === 'agent' ? (agentMaxTurns + 1) * callTimeoutMs : 0);
   const agentDeadlineMs = Math.max(10_000, leaseMs - 10_000);
   const retryBaseMs = opts.retryBaseMs ?? 2_000;
   const dupSettings = opts.duplicateSettings ?? DEFAULT_DUPLICATE_SETTINGS;
@@ -351,7 +357,7 @@ export function createAnalysisRunner(opts: RunnerOptions) {
     }
     if (!opts.storage?.enabled) throw new AiProviderError('UNAVAILABLE', 'storage not available');
     const [bytes, complaint] = await Promise.all([opts.storage.get(ev.storageKey), Complaint.findById(ev.complaint).select('title description').lean()]);
-    const result = await analyzeMedia(bytes, ev.contentType, { complaintTitle: complaint?.title ?? '', complaintDescription: complaint?.description ?? '' }, provider);
+    const result = await analyzeMedia(bytes, ev.contentType, { complaintTitle: complaint?.title ?? '', complaintDescription: complaint?.description ?? '' }, provider, video);
     await finish(job._id, { status: 'SUCCEEDED', ...mediaRecordFields(result) });
   }
 
@@ -365,7 +371,8 @@ export function createAnalysisRunner(opts: RunnerOptions) {
       await finish(job._id, { status: 'FAILED', errorCode: 'EVIDENCE_NOT_FOUND' });
       return;
     }
-    if (after.mediaType !== 'IMAGE' || after.sizeBytes > MAX_VISUAL_MODEL_BYTES) {
+    const comparable = (e: { mediaType: string; sizeBytes: number }) => (e.mediaType === 'VIDEO' ? video.enabled : e.sizeBytes <= MAX_VISUAL_MODEL_BYTES);
+    if (!comparable(after)) {
       await finish(job._id, { status: 'FAILED', errorCode: 'NOT_COMPARABLE' });
       return;
     }
@@ -373,23 +380,40 @@ export function createAnalysisRunner(opts: RunnerOptions) {
     if (!opts.storage?.enabled) throw new AiProviderError('UNAVAILABLE', 'storage not available');
     const storage = opts.storage;
     const complaint = await Complaint.findById(after.complaint).select('title description selectedCategory confirmedCategory').lean();
-    // Up to two of the citizen's own photos, oldest first, while the request stays small: base64 adds a
-    // third, and gateways cap request bodies (AiCredits.in: 10 MB).
-    let budget = MAX_COMPARISON_BYTES - after.sizeBytes;
-    const beforeDocs = (
-      await Evidence.find({ complaint: after.complaint, purpose: { $in: ['COMPLAINT_REPORT', 'ADDITIONAL'] }, mediaType: 'IMAGE', sizeBytes: { $lte: MAX_VISUAL_MODEL_BYTES } })
+    // Videos are compared through their middle frame. Up to two of the citizen's own photos/videos, oldest
+    // first, while the request stays small: base64 adds a third, and gateways cap request bodies (AiCredits.in: 10 MB).
+    const asImage = async (e: { storageKey: string; contentType: string; mediaType: string }): Promise<Buffer | ImageData> => {
+      const bytes = Buffer.from(await storage.get(e.storageKey));
+      if (e.mediaType !== 'VIDEO') return { mediaType: e.contentType as ImageData['mediaType'], base64: bytes.toString('base64') };
+      try {
+        const [frame] = await video.frames(bytes, { count: 1, maxWidth: 1280 });
+        return { mediaType: 'image/jpeg', base64: frame!.jpeg.toString('base64') };
+      } catch (err) {
+        if (err instanceof VideoProcessingError && err.kind === 'UNREADABLE') return bytes; // not comparable
+        throw new AiProviderError('UNAVAILABLE', 'video frames unavailable');
+      }
+    };
+    const afterImage = await asImage(after);
+    if (Buffer.isBuffer(afterImage)) {
+      await finish(job._id, { status: 'FAILED', errorCode: 'NOT_COMPARABLE' });
+      return;
+    }
+    let budget = MAX_COMPARISON_BYTES - (afterImage.base64.length * 3) / 4;
+    const candidates = (
+      await Evidence.find({ complaint: after.complaint, purpose: { $in: ['COMPLAINT_REPORT', 'ADDITIONAL'] } })
         .sort({ createdAt: 1 })
         .limit(5)
-        .select('storageKey contentType sizeBytes')
+        .select('storageKey contentType sizeBytes mediaType')
         .lean()
-    )
-      .filter((e) => (budget -= e.sizeBytes) >= 0)
-      .slice(0, 2);
-    const asImage = async (e: { storageKey: string; contentType: string }): Promise<ImageData> => ({
-      mediaType: e.contentType as ImageData['mediaType'],
-      base64: Buffer.from(await storage.get(e.storageKey)).toString('base64'),
-    });
-    const [afterImage, ...before] = await Promise.all([asImage(after), ...beforeDocs.map(asImage)]);
+    ).filter(comparable);
+    const before: ImageData[] = [];
+    for (const doc of candidates) {
+      if (before.length >= 2) break;
+      const img = await asImage(doc);
+      if (Buffer.isBuffer(img)) continue;
+      if ((budget -= (img.base64.length * 3) / 4) < 0) break;
+      before.push(img);
+    }
     const { output, meta } = await provider.compareResolution({
       before,
       after: afterImage!,
@@ -421,6 +445,7 @@ export function createAnalysisRunner(opts: RunnerOptions) {
       await finish(job._id, { status: 'FAILED', errorCode: 'EVIDENCE_NOT_FOUND' });
       return;
     }
+    if (ev.mediaType === 'VIDEO' && video.enabled) return runVideoRedaction(job, ev);
     if (ev.mediaType !== 'IMAGE') {
       await Evidence.updateOne({ _id: ev._id }, { $set: { redaction: { state: 'NOT_SUPPORTED', updatedAt: new Date() } } });
       await finish(job._id, { status: 'FAILED', errorCode: 'NOT_SUPPORTED' });
@@ -469,6 +494,88 @@ export function createAnalysisRunner(opts: RunnerOptions) {
       ...(modelRan && { provider: meta.provider, modelName: meta.model, promptVersion: meta.promptVersion, latencyMs: meta.latencyMs, usage: { inputTokens: meta.inputTokens, outputTokens: meta.outputTokens } }),
       ...(!modelRan && { provider: 'civicfix-rules', modelName: 'metadata-strip-v1' }),
       redaction: { regions },
+    });
+  }
+
+  /**
+   * Shareable copy of one video: frames sampled about every 2 s (up to MAX_PRIVACY_FRAMES) are checked for
+   * faces and number plates; each box found is pixelated from the previous sample to the next one, so
+   * things that move between samples stay covered. All metadata is removed and the copy is an MP4.
+   */
+  async function runVideoRedaction(job: { _id: Types.ObjectId; attempts: number }, ev: { _id: Types.ObjectId; storageKey: string }) {
+    if (!opts.storage?.enabled) throw new AiProviderError('UNAVAILABLE', 'storage not available');
+    const storage = opts.storage;
+    const bytes = await storage.get(ev.storageKey);
+    const fail = async (code: string) => {
+      await Evidence.updateOne({ _id: ev._id }, { $set: { redaction: { state: 'FAILED', updatedAt: new Date() } } });
+      await finish(job._id, { status: 'FAILED', errorCode: code });
+    };
+
+    let probe;
+    try {
+      probe = await video.probe(bytes);
+    } catch (err) {
+      if (err instanceof VideoProcessingError && err.kind === 'UNREADABLE') return fail('UNREADABLE_VIDEO');
+      throw new AiProviderError('UNAVAILABLE', 'video tools failed');
+    }
+
+    const timed: TimedRegion[] = [];
+    const found: { kind: 'FACE' | 'LICENSE_PLATE'; x: number; y: number; width: number; height: number }[] = [];
+    let modelRan = false;
+    let maxFaces = 0;
+    let maxPlates = 0;
+    let meta: { provider?: string; model?: string; promptVersion?: string; latencyMs?: number; inputTokens?: number; outputTokens?: number } = {};
+    if (provider.enabled && provider.detectPrivacyRegions) {
+      const times = sampleTimes(probe.durationSec, Math.min(MAX_PRIVACY_FRAMES, Math.max(2, Math.ceil(probe.durationSec / 2))));
+      try {
+        const frames = await video.frames(bytes, { atSec: times, maxWidth: 1024 });
+        const results: Awaited<ReturnType<NonNullable<AiProvider['detectPrivacyRegions']>>>[] = [];
+        // A few calls at a time keeps the job inside its lease without flooding the provider.
+        for (let i = 0; i < frames.length; i += 4) {
+          results.push(...(await Promise.all(frames.slice(i, i + 4).map((f) => provider.detectPrivacyRegions!({ mediaType: 'image/jpeg', base64: f.jpeg.toString('base64') })))));
+        }
+        frames.forEach((f, i) => {
+          const res = results[i]!;
+          meta = res.meta;
+          const startSec = i === 0 ? 0 : frames[i - 1]!.atSec;
+          const endSec = i === frames.length - 1 ? probe.durationSec + 1 : frames[i + 1]!.atSec;
+          for (const r of res.output.regions) {
+            timed.push({ x: r.x, y: r.y, width: r.width, height: r.height, startSec, endSec });
+            if (found.length < 40) found.push(r);
+          }
+          maxFaces = Math.max(maxFaces, res.output.regions.filter((r) => r.kind === 'FACE').length);
+          maxPlates = Math.max(maxPlates, res.output.regions.filter((r) => r.kind === 'LICENSE_PLATE').length);
+        });
+        modelRan = true;
+      } catch (err) {
+        const retryable = err instanceof AiProviderError ? err.retryable : true;
+        if (retryable && job.attempts < opts.maxAttempts) throw err;
+        timed.length = 0;
+        logger.warn({ evidenceId: String(ev._id), errorCode: err instanceof AiProviderError ? err.kind : 'INTERNAL_ERROR' }, 'video privacy detection failed; sharing a metadata-only copy');
+      }
+    }
+
+    let redacted: Buffer;
+    try {
+      redacted = await video.redact(bytes, timed);
+    } catch (err) {
+      if (err instanceof VideoProcessingError && err.kind === 'UNREADABLE') return fail('UNREADABLE_VIDEO');
+      if (job.attempts < opts.maxAttempts) throw new AiProviderError('UNAVAILABLE', 'video encode failed');
+      return fail('VIDEO_ENCODE_FAILED');
+    }
+    const key = ev.storageKey.replace(/\.([a-z0-9]+)$/, '.shared.mp4');
+    await storage.delete(key).catch(() => undefined); // a retry may have written it already
+    await storage.put(key, redacted, 'video/mp4');
+    await Evidence.updateOne(
+      { _id: ev._id },
+      { $set: { redaction: { state: modelRan ? 'DONE' : 'METADATA_ONLY', storageKey: key, contentType: 'video/mp4', faces: maxFaces, licensePlates: maxPlates, updatedAt: new Date() } } },
+    );
+    await finish(job._id, {
+      status: 'SUCCEEDED',
+      errorCode: null,
+      ...(modelRan && { provider: meta.provider, modelName: meta.model, promptVersion: meta.promptVersion, latencyMs: meta.latencyMs, usage: { inputTokens: meta.inputTokens, outputTokens: meta.outputTokens } }),
+      ...(!modelRan && { provider: 'civicfix-rules', modelName: 'metadata-strip-v1' }),
+      redaction: { regions: found },
     });
   }
 

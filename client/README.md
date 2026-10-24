@@ -1,108 +1,105 @@
 # CivicFix client
 
-Citizen web app: report a problem, list my complaints, track a complaint's status.
+React app for citizens, department staff, managers and platform administrators.
 
-**Status:** frontend shell on **mock data**. It is not connected to a backend yet. A "Demo mode" banner says so on every page.
+**Status:** connected to the CivicFix backend (`server/`). HTTP mode is the default. Mock mode (in-memory demo
+data) is still available for UI work without a server; it shows a "Development mode" banner.
 
-## Run
+## Run with the backend
 
 ```bash
-cd client
-npm install
-npm run dev        # http://localhost:5173
-npm run test       # focused unit and route tests
+# terminal 1: API on http://localhost:4000 (needs MongoDB and server/.env)
+cd server && npm run dev
+
+# terminal 2: app on http://localhost:5173
+cd client && npm install && npm run dev
+```
+
+In development Vite proxies `/api` to `http://localhost:4000` (`vite.config.ts`), so the app and API share one
+origin and the refresh cookie works without cross-site cookie settings. Demo accounts come from
+`cd server && npm run db:seed` (`admin@civicfix.local`, `citizen@civicfix.local`, department managers and workers);
+their password is in `server/.seed-credentials`. Citizens can also create an account at `/register`.
+
+```bash
+npm run test       # unit and route tests (page tests use the mock adapter)
 npm run build      # type-check + production build
 ```
 
-## Structure
-
-| Path | What it holds |
-|---|---|
-| `src/app/` | Application shell and centralized route configuration |
-| `src/index.css` | Design tokens (Tailwind v4 `@theme`) and base styles |
-| `src/lib/domain.ts` | Complaint types, the 11 blueprint statuses, citizen-facing labels, priorities, categories, and safe unknown-status fallback |
-| `src/lib/complaints.ts` | Authorized complaint list presentation helpers, client-side filtering/sorting, location summaries, and safe load errors |
-| `src/api/` | `CivicFixApi` interface, HTTP client, deterministic mock implementation, configuration, and errors |
-| `src/components/` | Shared UI: Button, fields, StatusTag, PriorityBadge, Notification, LocationPicker, PhotoInput, StatusTracker, Layout |
-| `src/pages/` | Home, Citizen dashboard, Report a problem, My complaints, Complaint detail |
-
 ## API mode
 
-Copy `.env.example` to `.env.local` when you want to make the mode explicit:
+`.env.example` lists the settings. Copy it to `.env.local` to change them.
 
-```bash
-VITE_CIVICFIX_API_MODE=mock
-VITE_CIVICFIX_API_BASE_URL=
-VITE_CIVICFIX_API_TIMEOUT_MS=10000
-VITE_CIVICFIX_AUTH_MODE=mock
-```
+| Variable | Default | Meaning |
+|---|---|---|
+| `VITE_CIVICFIX_API_MODE` | `http` | `http` = real backend; `mock` = local demo data (development builds only for auth) |
+| `VITE_CIVICFIX_API_BASE_URL` | empty (same origin) | Set only when the API is hosted on another origin (it must then list this app in `CORS_ORIGINS`, and cross-site cookies need `COOKIE_SAMESITE=none` + HTTPS) |
+| `VITE_CIVICFIX_API_TIMEOUT_MS` | `10000` | Per-request timeout (uploads and media checks use 3 minutes) |
+| `VITE_CIVICFIX_AUTH_MODE` | same as API mode | Must match the API mode |
 
-The development default is `mock`. A production build defaults to `http` and uses the same origin unless
-`VITE_CIVICFIX_API_BASE_URL` is set. A failed HTTP request never falls back to mock data.
+A failed HTTP request never falls back to mock data.
 
-## Authentication
+## How the client talks to the backend
 
-The project documents, but does not yet implement, these proposed backend endpoints in
-`docs/CivicFixFullDetails.pdf` (API modules section):
+All calls go through `src/api/httpApi.ts`, which follows `docs/api/*.md`:
 
-```text
-POST /api/v1/auth/login
-GET  /api/v1/auth/me
-POST /api/v1/auth/logout
-POST /api/v1/auth/register
-```
+- **Auth** (`docs/api/AUTHENTICATION.md`): the 15-minute access token is kept in memory only and sent as
+  `Authorization: Bearer`. On start-up the app calls `POST /auth/refresh` (HttpOnly cookie +
+  `X-Requested-With: civicfix`) to restore the session. Only one refresh runs at a time (Web Locks across tabs),
+  the token is refreshed shortly before it expires, and a request that gets `401 UNAUTHENTICATED` is retried once
+  after a refresh.
+- **User roles:** the backend user (`platformRole`, `roles`, `memberships`) is mapped in `src/api/backendUser.ts`
+  to one workspace: platform admin > department manager > department member > citizen. Department names come
+  from `GET /departments`.
+- **Errors:** the `{ error: { code, message, details } }` envelope becomes `ApiError(status, code)`.
+- **Lists** follow `meta.pagination` (100 per page).
+- **Photos** are uploaded after the complaint is created, as raw bytes to `POST /complaints/:id/evidence`. A failed
+  photo upload never loses the report; the detail page says how many failed. Evidence previews are fetched with the
+  bearer token into blob URLs.
 
-Phase 2 uses a typed adapter around those proposed contracts. The HTTP adapter sends credentialed requests for a
-cookie/session-based backend and does not persist passwords, session identifiers, access tokens, or refresh tokens in
-browser storage. The backend must provide the actual session, CSRF, response, and role contracts before HTTP auth can
-be considered integrated.
+| Role | Screens | Backend endpoints |
+|---|---|---|
+| Citizen | Sign-up (`/register`: live validation matching the server rules, password strength, privacy notice, duplicate-email path to log in, welcome panel on first visit), dashboard, report, my complaints, detail (follow-up answers, extra photos, confirm and close, dispute, rating), notifications | `/complaints`, `/complaints/:id/{follow-up,evidence,close,disputes,feedback}`, `/notifications` |
+| Department member | Workspace, **My work** (`/department/work`), work order detail (accept, decline, start, hold, notes, progress and resolution photos, submit fix), department complaints with AI analysis | `/work-orders`, `/work-orders/:id/*`, `/complaints?scope=department`, `/complaints/:id/analysis` |
+| Department manager | Overview (`/manager`), complaint review queue with AI suggestion and routing form, resolution review, assignment exceptions, verification (approve / reject / ask for evidence), staff assignment | `/assignments/queue`, `/complaints/:id/{assign,reject}`, `/work-orders/:id/{assign,cancel,verification}`, `/dashboard/department/manager`, `/departments/:id/members` |
+| Platform admin | Overview (live metrics + complaint analytics), triage queue (create work order or route only), all work orders (transfer), departments and members | `/dashboard/admin`, `/complaints?scope=all`, `/complaints/:id/classify`, `/work-orders/:id/transfer`, `/departments` |
 
-Development mock authentication is memory-only and available only when both API and auth modes are `mock` in a
-development build. It exposes four clearly labeled demo accounts on the login screen. Mock authentication is rejected
-in production configuration and never activates after an HTTP failure.
+Buttons follow each record's `allowedActions`; the server re-checks every action. The route guards are a UX layer
+only.
 
-The frontend route guards are a UX layer only. The backend must independently enforce authentication, role, department
-scope, ownership, and permissions.
+Not wired yet (backend endpoints exist): dispute review for managers (`/disputes`), the audit log viewer
+(`/audit-logs`), duplicate linking (`/complaints/:id/duplicate-of`), department create/edit and membership changes,
+the citizen dashboard endpoint, and analytics maps (`/analytics/*`).
 
 ## Citizen complaint submission
 
-The canonical citizen submission route is:
+Routes: `/citizen/complaints/new` (and the alias `/report`), behind the citizen route guard.
 
-```text
-/citizen/complaints/new
-```
+The form collects title, description, map location, optional landmark and category, and up to **3 photos or videos**. On submit, each file is first checked by the server (`POST /api/v1/evidence/check`); if one looks AI-generated or edited the complaint is **not** created and the form returns to the photo step naming the file. Then the complaint is created and the files are uploaded.
 
-`/report` remains as a backwards-compatible alias. Both routes require a validated citizen session through the Phase 2
-route guard.
+## Location in words
 
-The only available complaint-creation contract is provisional. The project blueprint proposes `POST /api/v1/complaints`
-(`docs/CivicFixFullDetails.pdf`, API modules section), while the current frontend draft is defined by
-`src/lib/domain.ts` and `src/api/types.ts`:
+After the citizen taps the map, types coordinates or uses **Use my current location**, `LocationPicker` asks the server for `GET /api/v1/geo/reverse` and shows the street address (OpenStreetMap), the nearest mapped landmark with its distance, and the ward. For "current location" it also shows the GPS accuracy, and warns when the fix is rough (over ±100 m, common on laptops) so the citizen can correct the pin. The review step and all complaint pages show the saved address next to the coordinates.
 
-```text
-title: string
-description: string
-location: { lat: number; lng: number }
-landmark?: string
-selectedCategory: CategoryId | null
-photos: File[]
-```
+## Photos and videos: in-app camera
 
-The client validates the current draft limits (title 5–120 characters, description 10–2000 characters, valid geographic
-coordinates, up to 3 images of 10 MB each). These limits remain provisional until backend validators are available.
+The server's capture rules come from `GET /api/v1/evidence/capture-policy` (`src/lib/capture.ts`, `useCapturePolicy`).
 
-The mock adapter accepts image attachments for local UI testing but stores only photo counts; it does not persist image
-contents to a real service. The HTTP adapter currently reports photo uploads as unavailable because no backend upload,
-storage, or signed-URL contract exists. Text and location submission remains isolated behind the typed API boundary.
+| Server setting | What the app shows |
+|---|---|
+| `EVIDENCE_CAPTURE=camera` (default) | Only **Take a photo or video**. The gallery/file picker isn't offered. |
+| `EVIDENCE_CAPTURE=any` | **Take a photo or video** and **Choose files** |
 
-## Connecting the backend
+`src/components/CameraCapture.tsx`:
 
-The HTTP implementation of `CivicFixApi` is already present in `src/api/httpApi.ts` and targets the proposed
-`/api/v1/complaints` and authentication contracts. Set both `VITE_CIVICFIX_API_MODE=http` and
-`VITE_CIVICFIX_AUTH_MODE=http` when the backend is ready. The optional authentication-token hook remains available
-for a future contract that explicitly requires bearer authentication.
+- Opens a camera session (`POST /api/v1/evidence/capture-sessions`) and the back camera (`getUserMedia`, `facingMode: environment`), and watches GPS while open.
+- **Take photo** grabs a frame into a JPEG; **Record video** uses `MediaRecorder` (MP4 where supported, otherwise WebM, which the server converts), stopping automatically at the server's video limit.
+- Each capture is stamped with the session token, the capture time and the GPS fix (`src/lib/captureStamp.ts`); the API client sends these as `X-Capture-*` headers on the check and the upload.
+- If the page can't use the camera (plain HTTP on a phone, old browser), it opens the phone's own camera app (`<input capture="environment">`) and only accepts a file created in the last 3 minutes.
+- **HTTPS is required** for the camera and GPS on phones (`localhost` is fine on a computer).
 
-The mock stores new complaints in `localStorage` and moves each one to "Under review" after 4 seconds to simulate the backend.
+The same camera is used in the evidence panels: extra citizen photos, worker progress and **resolution** photos/videos, and dispute evidence. Staff see "Taken with the in-app camera" on each such file, and the AI authenticity badge.
+
+Uploads and checks use a longer request timeout (3 minutes) because the server runs the AI check (and ffmpeg for videos) before answering.
 
 ## Citizen dashboard and tracking
 
