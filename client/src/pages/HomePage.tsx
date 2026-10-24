@@ -4,6 +4,7 @@ import { useState, type FormEvent } from 'react';
 import { useNavigate } from 'react-router';
 import { Button, ButtonLink } from '../components/Button';
 import { TextInput } from '../components/Field';
+import { PageMeta } from '../components/PageMeta';
 
 const STEPS = [
   { title: 'Report', text: 'Describe the problem, drop a pin and add a photo. Any language is fine.' },
@@ -28,6 +29,7 @@ export function HomePage() {
 
   return (
     <>
+      <PageMeta title="CivicFix" />
       <section className="border-b border-hairline">
         <div className="mx-auto max-w-[66rem] px-4 py-12 md:py-20 grid gap-12 lg:grid-cols-[1fr_22rem] lg:items-end">
           <div className="max-w-[40rem]">

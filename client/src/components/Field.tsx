@@ -99,3 +99,88 @@ export function Select({ label, optional, helper, error, className, children, ..
     </FieldWrapper>
   );
 }
+
+export function Checkbox({ label, helper, error, className, ...rest }: Omit<Common, 'optional'> & InputHTMLAttributes<HTMLInputElement>) {
+  const id = useId();
+  return (
+    <div className="flex flex-col gap-2">
+      <label htmlFor={id} className="flex min-h-12 items-center gap-3 text-[0.875rem] text-ink">
+        <input
+          id={id}
+          type="checkbox"
+          aria-invalid={!!error}
+          aria-describedby={describedBy(id, error, helper)}
+          className={cx('h-5 w-5 accent-primary', error && fieldError, className)}
+          {...rest}
+        />
+        <span>{label}</span>
+      </label>
+      {error ? (
+        <p id={`${id}-msg`} className="text-[0.75rem] text-error">
+          {error}
+        </p>
+      ) : helper ? (
+        <p id={`${id}-msg`} className="text-[0.75rem] text-ink-muted">
+          {helper}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+interface RadioOption {
+  value: string;
+  label: string;
+  disabled?: boolean;
+}
+
+export function RadioGroup({
+  label,
+  value,
+  options,
+  onChange,
+  helper,
+  error,
+  name,
+}: {
+  label: string;
+  value?: string;
+  options: RadioOption[];
+  onChange: (value: string) => void;
+  helper?: ReactNode;
+  error?: string;
+  name?: string;
+}) {
+  const groupId = useId();
+  const groupName = name ?? groupId;
+  return (
+    <fieldset className="flex flex-col gap-2" aria-describedby={describedBy(groupId, error, helper)}>
+      <legend className="text-[0.75rem] tracking-[0.02em] text-ink-muted">{label}</legend>
+      <div className="flex flex-col gap-2">
+        {options.map((option) => (
+          <label key={option.value} className="flex min-h-12 items-center gap-3 text-[0.875rem] text-ink">
+            <input
+              type="radio"
+              name={groupName}
+              value={option.value}
+              checked={value === option.value}
+              disabled={option.disabled}
+              onChange={() => onChange(option.value)}
+              className="h-5 w-5 accent-primary"
+            />
+            <span>{option.label}</span>
+          </label>
+        ))}
+      </div>
+      {error ? (
+        <p id={`${groupId}-msg`} className="text-[0.75rem] text-error">
+          {error}
+        </p>
+      ) : helper ? (
+        <p id={`${groupId}-msg`} className="text-[0.75rem] text-ink-muted">
+          {helper}
+        </p>
+      ) : null}
+    </fieldset>
+  );
+}

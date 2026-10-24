@@ -2,14 +2,15 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router';
 import { api } from '../api';
 import { ButtonLink } from '../components/Button';
+import { ErrorState } from '../components/Feedback';
 import { Page } from '../components/Layout';
-import { Notification } from '../components/Notification';
 import { PriorityBadge, StatusTag } from '../components/Tag';
 import { categoryLabel, formatDateTime, type Complaint } from '../lib/domain';
 
 export function ComplaintsPage() {
   const [items, setItems] = useState<Complaint[] | null>(null);
   const [error, setError] = useState(false);
+  const [reloadToken, setReloadToken] = useState(0);
 
   useEffect(() => {
     let alive = true;
@@ -20,7 +21,13 @@ export function ComplaintsPage() {
     return () => {
       alive = false;
     };
-  }, []);
+  }, [reloadToken]);
+
+  function retry() {
+    setError(false);
+    setItems(null);
+    setReloadToken((value) => value + 1);
+  }
 
   return (
     <Page
@@ -28,7 +35,7 @@ export function ComplaintsPage() {
       intro="Everything you have reported, newest activity first."
       actions={<ButtonLink to="/report">Report a problem</ButtonLink>}
     >
-      {error && <Notification kind="error" title="We could not load your complaints. Refresh the page to try again." />}
+      {error && <ErrorState title="We could not load your complaints" onRetry={retry} />}
       {!items && !error && <ListSkeleton />}
       {items && items.length === 0 && (
         <div className="border border-hairline p-8">

@@ -3,6 +3,7 @@ import { Link, useLocation, useParams } from 'react-router';
 import { CircleMarker, MapContainer, TileLayer } from 'react-leaflet';
 import { api } from '../api';
 import { ButtonLink } from '../components/Button';
+import { ErrorState, LoadingIndicator } from '../components/Feedback';
 import { Page } from '../components/Layout';
 import { Notification } from '../components/Notification';
 import { StatusHistory, StatusTracker } from '../components/StatusTracker';
@@ -16,6 +17,7 @@ export function ComplaintDetailPage() {
   const justSubmitted = (useLocation().state as { justSubmitted?: boolean } | null)?.justSubmitted;
   const [complaint, setComplaint] = useState<Complaint | null | undefined>(undefined);
   const [error, setError] = useState(false);
+  const [reloadToken, setReloadToken] = useState(0);
 
   useEffect(() => {
     let alive = true;
@@ -35,14 +37,12 @@ export function ComplaintDetailPage() {
       alive = false;
       clearInterval(timer);
     };
-  }, [publicId]);
+  }, [publicId, reloadToken]);
 
   if (complaint === undefined && !error) {
     return (
       <Page title="Loading complaint…">
-        <p className="text-ink-muted" aria-busy="true">
-          Fetching the latest status.
-        </p>
+        <LoadingIndicator label="Fetching the latest status" />
       </Page>
     );
   }
@@ -51,7 +51,14 @@ export function ComplaintDetailPage() {
     return (
       <Page title="Complaint not found">
         {error ? (
-          <Notification kind="error" title="We could not load this complaint. Refresh the page to try again." />
+          <ErrorState
+            title="We could not load this complaint"
+            onRetry={() => {
+              setError(false);
+              setComplaint(undefined);
+              setReloadToken((value) => value + 1);
+            }}
+          />
         ) : (
           <p className="text-ink-muted">
             There is no complaint with ID <span className="font-mono">{publicId}</span>. Check the ID or go to{' '}
