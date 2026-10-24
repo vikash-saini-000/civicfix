@@ -161,7 +161,7 @@ cd server
 NEW_USER_PASSWORD='…' npm run user:create -- --email admin@example.org --name "Admin" --role PLATFORM_ADMIN
 ```
 
-Department memberships (member and manager roles) will be managed through the department APIs in Phase 5.
+Department memberships (member and manager roles) are managed through the department APIs; see [USERS_DEPARTMENTS_MEMBERSHIPS.md](USERS_DEPARTMENTS_MEMBERSHIPS.md).
 
 ## Not implemented yet
 

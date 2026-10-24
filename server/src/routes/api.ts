@@ -1,5 +1,10 @@
 import { Router } from 'express';
+import { createDepartmentService } from '../services/departments.js';
+import { createMembershipService } from '../services/memberships.js';
+import { createUserService } from '../services/users.js';
 import { authRouter, type AuthRouterDeps } from './auth.js';
+import { departmentsRouter } from './departments.js';
+import { usersRouter } from './users.js';
 
 export type ApiDeps = AuthRouterDeps;
 
@@ -16,6 +21,12 @@ export type ApiDeps = AuthRouterDeps;
  */
 export function apiRouter(deps: ApiDeps): Router {
   const router = Router();
+  const { authService } = deps;
   router.use('/auth', authRouter(deps));
+  router.use('/users', usersRouter({ authService, userService: createUserService(authService) }));
+  router.use(
+    '/departments',
+    departmentsRouter({ authService, departmentService: createDepartmentService(), membershipService: createMembershipService() }),
+  );
   return router;
 }

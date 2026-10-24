@@ -1,8 +1,8 @@
 # CivicFix server
 
-**Status:** Phase 4. Models, the Express foundation, the MongoDB connection, health checks, logging, graceful shutdown, request validation, the response envelope, and JWT authentication with role guards exist. There are no complaint, department or AI APIs yet.
+**Status:** Phase 5. Models, the Express foundation, the MongoDB connection, health checks, logging, graceful shutdown, request validation, the response envelope, JWT authentication with role guards, user profiles, departments and department memberships exist. There are no complaint, work-order or AI APIs yet.
 
-For client developers: [`docs/api/API_CONVENTIONS.md`](../docs/api/API_CONVENTIONS.md) and [`docs/api/AUTHENTICATION.md`](../docs/api/AUTHENTICATION.md).
+For client developers: [`API_CONVENTIONS.md`](../docs/api/API_CONVENTIONS.md), [`AUTHENTICATION.md`](../docs/api/AUTHENTICATION.md) and [`USERS_DEPARTMENTS_MEMBERSHIPS.md`](../docs/api/USERS_DEPARTMENTS_MEMBERSHIPS.md).
 
 Stack: Node 22+ (ESM), TypeScript, Express 5, Mongoose 9, zod 4, pino, Vitest.
 
@@ -85,6 +85,16 @@ Full contract: [`docs/api/AUTHENTICATION.md`](../docs/api/AUTHENTICATION.md).
 | Tokens, password hashing, refresh cookie | `src/auth/tokens.ts`, `src/auth/password.ts`, `src/auth/cookies.ts` |
 | Session model | `src/models/AuthSession.ts` |
 
+## Users, departments, memberships
+
+| Piece | File |
+|---|---|
+| Routes and request schemas | `src/routes/users.ts`, `src/routes/departments.ts` |
+| Business rules and authorization per department | `src/services/users.ts`, `src/services/departments.ts`, `src/services/memberships.ts` |
+| Audit helper | `src/services/audit.ts` |
+
+Membership authority is computed in `authorityOver(principal, departmentId)`: platform admin, or manager of **that** department, else none. Revoking sets `status: INACTIVE`, and adding the user again reactivates the same record, so the unique `(user, department)` index still holds. No schema changes were needed in Phase 5.
+
 ## Writing routes (conventions)
 
 Feature routers are mounted in `src/routes/api.ts`. Per route: `[rate limit] → requireAuth → requireRole / requireDepartmentRole → validate(...) → handler`. Identity comes only from `req.auth`.
@@ -134,6 +144,7 @@ MONGOMS_SYSTEM_BINARY="C:/Program Files/MongoDB/Server/8.0/bin/mongod.exe" npm t
 | `tests/app.test.ts` | Health, 404, malformed or oversized JSON, safe errors, request IDs, CORS, headers, log redaction |
 | `tests/lifecycle.test.ts` | DB connection failure, single connect, readiness up/down, graceful shutdown and timeout |
 | `tests/auth.test.ts` | Register, login, refresh rotation and reuse detection, logout, token tampering and expiry, rate limits, role and department guards, CORS, log and response secrecy |
+| `tests/departments.test.ts` | Profile updates, department CRUD and deactivation, membership add, reactivate, role change and revoke, per-department authority, concurrency, audit |
 | `tests/conventions.test.ts` | Validation details, unknown-field rejection, 415, pagination limits, success envelope, error mapping (409/400/500), rate limit, log content |
 
 ## Transactions
