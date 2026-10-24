@@ -84,7 +84,7 @@ describe('LoginPage', () => {
     fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'demo-password' } });
     fireEvent.submit(document.querySelector('form')!);
 
-    await waitFor(() => expect(screen.getByTestId('location')).toHaveTextContent('/citizen'));
+    await waitFor(() => expect(screen.getByTestId('location')).toHaveTextContent('/citizen/dashboard'));
     expect(screen.getByTestId('location')).not.toHaveTextContent('example.com');
   });
 

@@ -10,8 +10,8 @@ import { PageMeta } from './PageMeta';
 import { cx } from '../lib/cx';
 
 const PUBLIC_NAVIGATION: NavigationItem[] = [
-  { label: 'Report a problem', to: '/report' },
-  { label: 'My complaints', to: '/complaints' },
+  { label: 'Report a problem', to: '/citizen/complaints/new' },
+  { label: 'My complaints', to: '/citizen/complaints' },
   { label: 'Log in', to: '/login' },
 ];
 

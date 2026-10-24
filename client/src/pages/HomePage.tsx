@@ -5,6 +5,7 @@ import { useNavigate } from 'react-router';
 import { Button, ButtonLink } from '../components/Button';
 import { TextInput } from '../components/Field';
 import { PageMeta } from '../components/PageMeta';
+import { isUsableComplaintId } from '../lib/complaints';
 
 const STEPS = [
   { title: 'Report', text: 'Describe the problem, drop a pin and add a photo. Any language is fine.' },
@@ -20,11 +21,11 @@ export function HomePage() {
   function onTrack(e: FormEvent) {
     e.preventDefault();
     const id = trackId.trim().toUpperCase();
-    if (!/^CF-\d{4}-\d{5}$/.test(id)) {
-      setTrackError('Enter an ID like CF-2026-00141.');
+    if (!isUsableComplaintId(id)) {
+      setTrackError('Enter a valid complaint ID.');
       return;
     }
-    navigate(`/complaints/${id}`);
+    navigate(`/citizen/complaints/${id}`);
   }
 
   return (
@@ -42,10 +43,10 @@ export function HomePage() {
               closes it when there is proof the work was done.
             </p>
             <div className="mt-8 flex flex-wrap gap-4">
-              <ButtonLink to="/report" className="min-w-56">
+               <ButtonLink to="/citizen/complaints/new" className="min-w-56">
                 Report a problem
               </ButtonLink>
-              <ButtonLink to="/complaints" variant="tertiary">
+               <ButtonLink to="/citizen/complaints" variant="tertiary">
                 View my complaints
               </ButtonLink>
             </div>

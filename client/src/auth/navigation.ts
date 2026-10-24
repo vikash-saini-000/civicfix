@@ -14,7 +14,7 @@ export const ROLE_LABELS: Record<Role, string> = {
 };
 
 const ROLE_DEFAULT_PATHS: Record<Role, string> = {
-  citizen: '/citizen',
+  citizen: '/citizen/dashboard',
   department_member: '/department',
   department_manager: '/manager',
   platform_admin: '/admin',
@@ -22,9 +22,9 @@ const ROLE_DEFAULT_PATHS: Record<Role, string> = {
 
 const ROLE_NAVIGATION: Record<Role, NavigationItem[]> = {
   citizen: [
-    { label: 'Dashboard', to: '/citizen', end: true },
-    { label: 'My complaints', to: '/complaints' },
-    { label: 'Report an issue', to: '/report' },
+    { label: 'Dashboard', to: '/citizen/dashboard', end: true },
+    { label: 'My complaints', to: '/citizen/complaints' },
+    { label: 'Report an issue', to: '/citizen/complaints/new' },
   ],
   department_member: [
     { label: 'Department workspace', to: '/department', end: true },

@@ -1,5 +1,6 @@
 import type { Complaint, NewComplaintInput } from '../lib/domain';
 import type { AuthSession, AuthUser, LoginCredentials } from './authTypes';
+import { parseComplaint, parseComplaintList } from './complaintContract';
 import { ApiError } from './errors';
 import type { CivicFixApi } from './types';
 
@@ -12,6 +13,8 @@ export interface HttpApiOptions {
 
 export class HttpCivicFixApi implements CivicFixApi {
   constructor(private readonly options: HttpApiOptions) {}
+
+  readonly capabilities = { photoAttachments: false } as const;
 
   login(credentials: LoginCredentials, signal?: AbortSignal): Promise<AuthSession> {
     return this.request<AuthSession>('/api/v1/auth/login', { method: 'POST', body: credentials, signal });
@@ -29,25 +32,30 @@ export class HttpCivicFixApi implements CivicFixApi {
   }
 
   listMyComplaints(signal?: AbortSignal): Promise<Complaint[]> {
-    return this.request<Complaint[]>('/api/v1/complaints', { signal });
+    return this.request<unknown>('/api/v1/complaints', { signal }).then(parseComplaintList);
   }
 
   getComplaint(publicId: string, signal?: AbortSignal): Promise<Complaint | null> {
-    return this.request<Complaint>(`/api/v1/complaints/${encodeURIComponent(publicId)}`, { signal }).catch((error: unknown) => {
-      if (error instanceof ApiError && error.status === 404) return null;
-      throw error;
-    });
+    return this.request<unknown>(`/api/v1/complaints/${encodeURIComponent(publicId)}`, { signal })
+      .then(parseComplaint)
+      .catch((error: unknown) => {
+        if (error instanceof ApiError && error.status === 404) return null;
+        throw error;
+      });
   }
 
   submitComplaint(input: NewComplaintInput, signal?: AbortSignal): Promise<Complaint> {
-    const body = new FormData();
-    body.append('title', input.title);
-    body.append('description', input.description);
-    body.append('location', JSON.stringify(input.location));
-    body.append('selectedCategory', input.selectedCategory ?? '');
-    if (input.landmark) body.append('landmark', input.landmark);
-    for (const photo of input.photos) body.append('photos', photo, photo.name);
-    return this.request<Complaint>('/api/v1/complaints', { method: 'POST', body, signal });
+    if (input.photos.length > 0) {
+      return Promise.reject(new ApiError('Photo uploads are not configured for the backend contract yet.', 501, 'MEDIA_NOT_CONFIGURED'));
+    }
+    const body = {
+      title: input.title,
+      description: input.description,
+      location: input.location,
+      selectedCategory: input.selectedCategory,
+      landmark: input.landmark,
+    };
+    return this.request<unknown>('/api/v1/complaints', { method: 'POST', body, signal }).then(parseComplaint);
   }
 
   private async request<T>(

@@ -20,10 +20,11 @@ npm run build      # type-check + production build
 |---|---|
 | `src/app/` | Application shell and centralized route configuration |
 | `src/index.css` | Design tokens (Tailwind v4 `@theme`) and base styles |
-| `src/lib/domain.ts` | Complaint types, the 11 blueprint statuses, citizen-facing labels, priorities, categories |
+| `src/lib/domain.ts` | Complaint types, the 11 blueprint statuses, citizen-facing labels, priorities, categories, and safe unknown-status fallback |
+| `src/lib/complaints.ts` | Authorized complaint list presentation helpers, client-side filtering/sorting, location summaries, and safe load errors |
 | `src/api/` | `CivicFixApi` interface, HTTP client, deterministic mock implementation, configuration, and errors |
 | `src/components/` | Shared UI: Button, fields, StatusTag, PriorityBadge, Notification, LocationPicker, PhotoInput, StatusTracker, Layout |
-| `src/pages/` | Home, Report a problem, My complaints, Complaint detail |
+| `src/pages/` | Home, Citizen dashboard, Report a problem, My complaints, Complaint detail |
 
 ## API mode
 
@@ -63,6 +64,37 @@ in production configuration and never activates after an HTTP failure.
 The frontend route guards are a UX layer only. The backend must independently enforce authentication, role, department
 scope, ownership, and permissions.
 
+## Citizen complaint submission
+
+The canonical citizen submission route is:
+
+```text
+/citizen/complaints/new
+```
+
+`/report` remains as a backwards-compatible alias. Both routes require a validated citizen session through the Phase 2
+route guard.
+
+The only available complaint-creation contract is provisional. The project blueprint proposes `POST /api/v1/complaints`
+(`docs/CivicFixFullDetails.pdf`, API modules section), while the current frontend draft is defined by
+`src/lib/domain.ts` and `src/api/types.ts`:
+
+```text
+title: string
+description: string
+location: { lat: number; lng: number }
+landmark?: string
+selectedCategory: CategoryId | null
+photos: File[]
+```
+
+The client validates the current draft limits (title 5–120 characters, description 10–2000 characters, valid geographic
+coordinates, up to 3 images of 10 MB each). These limits remain provisional until backend validators are available.
+
+The mock adapter accepts image attachments for local UI testing but stores only photo counts; it does not persist image
+contents to a real service. The HTTP adapter currently reports photo uploads as unavailable because no backend upload,
+storage, or signed-URL contract exists. Text and location submission remains isolated behind the typed API boundary.
+
 ## Connecting the backend
 
 The HTTP implementation of `CivicFixApi` is already present in `src/api/httpApi.ts` and targets the proposed
@@ -71,6 +103,42 @@ The HTTP implementation of `CivicFixApi` is already present in `src/api/httpApi.
 for a future contract that explicitly requires bearer authentication.
 
 The mock stores new complaints in `localStorage` and moves each one to "Under review" after 4 seconds to simulate the backend.
+
+## Citizen dashboard and tracking
+
+The Phase 4 canonical routes are:
+
+```text
+/citizen/dashboard
+/citizen/complaints
+/citizen/complaints/:complaintId
+```
+
+`/citizen` remains a compatibility alias for the dashboard. The earlier `/complaints` and `/complaints/:publicId` routes
+remain guarded compatibility aliases; new navigation uses the canonical citizen paths. All citizen routes reuse the Phase 2
+authentication and citizen-role guards.
+
+The current typed API boundary exposes:
+
+```text
+GET /api/v1/complaints
+GET /api/v1/complaints/:id
+```
+
+These routes are proposed in `docs/CivicFixFullDetails.pdf`, API modules section, and are not implemented in this repository.
+The current adapter contract returns an authorized `Complaint[]` list and a `Complaint | null` detail. It has no pagination
+metadata, server-side filter/sort parameters, separate summary-count endpoint, or separate public-history endpoint.
+
+Dashboard counts are exact counts derived from the complete list returned by the adapter for the signed-in citizen. The list
+page applies search, exact-status filtering, exact-category filtering, and sorting locally to that returned authorized data;
+it does not claim server-side pagination. The UI does not expose department, priority, internal assignment, or other
+operational fields in citizen-facing tracking views.
+
+Status history is rendered only from the complaint's typed `history` field, whose draft contract marks notes as citizen-facing.
+An empty history produces an explanation rather than an invented timeline. Unknown future status codes receive a readable
+fallback instead of crashing the page. The HTTP and mock adapters normalize the citizen-safe fields and do not pass through
+department or priority fields. The backend must provide an explicit public-history contract before mixed internal and public
+updates can be safely displayed.
 
 ## Design
 

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { CircleMarker, MapContainer, TileLayer, useMap, useMapEvents } from 'react-leaflet';
-import type { GeoPoint } from '../lib/domain';
+import { isValidGeoPoint, type GeoPoint } from '../lib/domain';
 import { Button } from './Button';
 import { cx } from '../lib/cx';
 
@@ -39,6 +39,15 @@ export function LocationPicker({ value, onChange, error }: Props) {
   const [locating, setLocating] = useState(false);
   const [geoError, setGeoError] = useState<string | null>(null);
 
+  function setLocation(point: GeoPoint) {
+    if (!isValidGeoPoint(point)) {
+      setGeoError('That location is not valid. Tap the map or try again.');
+      return;
+    }
+    setGeoError(null);
+    onChange(point);
+  }
+
   function useMyLocation() {
     if (!('geolocation' in navigator)) {
       setGeoError('Your browser cannot share its location. Tap the map instead.');
@@ -49,7 +58,7 @@ export function LocationPicker({ value, onChange, error }: Props) {
     navigator.geolocation.getCurrentPosition(
       (pos) => {
         setLocating(false);
-        onChange({ lat: pos.coords.latitude, lng: pos.coords.longitude });
+         setLocation({ lat: pos.coords.latitude, lng: pos.coords.longitude });
       },
       () => {
         setLocating(false);
@@ -73,7 +82,7 @@ export function LocationPicker({ value, onChange, error }: Props) {
             attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
             url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
           />
-          <ClickToPlace onPick={onChange} />
+           <ClickToPlace onPick={setLocation} />
           <FlyTo point={value} />
           {value && <CircleMarker center={[value.lat, value.lng]} radius={10} pathOptions={markerStyle} />}
         </MapContainer>

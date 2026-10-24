@@ -1,4 +1,4 @@
-import { PRIORITY_META, STATUS_META, type ComplaintStatus, type Priority } from '../lib/domain';
+import { getStatusMeta, PRIORITY_META, type ComplaintStatus, type Priority } from '../lib/domain';
 import { cx } from '../lib/cx';
 
 const toneClass = {
@@ -15,7 +15,7 @@ const tagBase = 'inline-flex items-center min-h-6 px-2 text-[0.75rem] tracking-[
 
 /** Status is always shown as text, never by colour alone. */
 export function StatusTag({ status }: { status: ComplaintStatus }) {
-  const meta = STATUS_META[status];
+  const meta = getStatusMeta(status);
   return <span className={cx(tagBase, toneClass[meta.tone])}>{meta.label}</span>;
 }
 

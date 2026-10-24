@@ -24,6 +24,8 @@ describe('mock CivicFix API', () => {
 
     const before = await api.listMyComplaints();
     expect(before).toHaveLength(3);
+    expect(before[0]).not.toHaveProperty('department');
+    expect(before[0]).not.toHaveProperty('priority');
 
     const created = await api.submitComplaint({
       title: 'Broken public tap',

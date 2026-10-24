@@ -5,6 +5,7 @@ import { PublicOnlyRoute, RequireAuth, RequireRole } from '../auth/RouteGuards';
 import { Layout, Page } from '../components/Layout';
 import { ComplaintDetailPage } from '../pages/ComplaintDetailPage';
 import { ComplaintsPage } from '../pages/ComplaintsPage';
+import { DashboardPage } from '../pages/DashboardPage';
 import { HomePage } from '../pages/HomePage';
 import { LoginPage, RegisterPage, RolePlaceholderPage } from '../pages/PlaceholderPages';
 import { ReportPage } from '../pages/ReportPage';
@@ -31,6 +32,11 @@ export function AppRoutes() {
           }
         />
         <Route path="report" element={<Guarded roles={['citizen']}><ReportPage /></Guarded>} />
+        <Route path="citizen/complaints/new" element={<Guarded roles={['citizen']}><ReportPage /></Guarded>} />
+        <Route path="citizen/dashboard" element={<Guarded roles={['citizen']}><DashboardPage /></Guarded>} />
+        <Route path="citizen/complaints" element={<Guarded roles={['citizen']}><ComplaintsPage /></Guarded>} />
+        <Route path="citizen/complaints/:complaintId" element={<Guarded roles={['citizen']}><ComplaintDetailPage /></Guarded>} />
+        <Route path="citizen" element={<Guarded roles={['citizen']}><DashboardPage /></Guarded>} />
         <Route path="complaints" element={<Guarded roles={['citizen']}><ComplaintsPage /></Guarded>} />
         <Route path="complaints/:publicId" element={<Guarded roles={['citizen']}><ComplaintDetailPage /></Guarded>} />
         <Route path="citizen/*" element={<Guarded roles={['citizen']}><RolePlaceholderPage role="Citizen" /></Guarded>} />

@@ -1,4 +1,4 @@
-import type { Complaint, ComplaintStatus } from '../lib/domain';
+import type { Complaint, ComplaintStatus, Priority } from '../lib/domain';
 import type { ComplaintApi } from './types';
 
 const STORAGE_KEY = 'civicfix.mock.complaints.v1';
@@ -13,6 +13,11 @@ export interface MockApiOptions {
   storage?: StorageLike;
   latencyMs?: number;
   reviewDelayMs?: number;
+}
+
+interface StoredComplaint extends Complaint {
+  department?: string;
+  priority: Priority | null;
 }
 
 export function createMockApi(options: MockApiOptions = {}): ComplaintApi {
@@ -39,6 +44,7 @@ export function createMockApi(options: MockApiOptions = {}): ComplaintApi {
       const at = now().toISOString();
       complaint.status = status;
       complaint.updatedAt = at;
+      complaint.history ??= [];
       complaint.history.push({ status, at });
       save();
     }, reviewDelayMs);
@@ -50,21 +56,22 @@ export function createMockApi(options: MockApiOptions = {}): ComplaintApi {
   }
 
   return {
+    capabilities: { photoAttachments: true },
     async listMyComplaints(signal) {
       await delay(latencyMs, signal);
-      return structuredClone(complaints).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+      return complaints.map(toCitizenComplaint).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
     },
 
     async getComplaint(publicId, signal) {
       await delay(latencyMs, signal);
       const complaint = complaints.find((item) => item.publicId === publicId.toUpperCase());
-      return complaint ? structuredClone(complaint) : null;
+      return complaint ? toCitizenComplaint(complaint) : null;
     },
 
     async submitComplaint(input, signal) {
       await delay(Math.max(latencyMs, 400), signal);
       const timestamp = now().toISOString();
-      const complaint: Complaint = {
+      const complaint: StoredComplaint = {
         publicId: nextId(),
         title: input.title.trim(),
         description: input.description.trim(),
@@ -82,16 +89,16 @@ export function createMockApi(options: MockApiOptions = {}): ComplaintApi {
       complaints = [complaint, ...complaints];
       save();
       scheduleReview(complaint.publicId);
-      return structuredClone(complaint);
+      return toCitizenComplaint(complaint);
     },
   };
 }
 
-function load(storage: StorageLike | undefined, now: () => Date): Complaint[] {
+function load(storage: StorageLike | undefined, now: () => Date): StoredComplaint[] {
   if (storage) {
     try {
       const raw = storage.getItem(STORAGE_KEY);
-      if (raw) return JSON.parse(raw) as Complaint[];
+      if (raw) return JSON.parse(raw) as StoredComplaint[];
     } catch {
       // Storage or a previous mock payload may be unavailable; use the seed data.
     }
@@ -124,7 +131,7 @@ function delay(ms: number, signal?: AbortSignal): Promise<void> {
   });
 }
 
-function createSeed(now: () => Date): Complaint[] {
+function createSeed(now: () => Date): StoredComplaint[] {
   const hoursAgo = (hours: number) => new Date(now().getTime() - hours * 3_600_000).toISOString();
   // Simulated data near NITK Surathkal. Not real complaints.
   return [
@@ -146,7 +153,7 @@ function createSeed(now: () => Date): Complaint[] {
       history: [
         { status: 'REPORTED', at: hoursAgo(70) },
         { status: 'UNDER_REVIEW', at: hoursAgo(69.8) },
-        { status: 'ASSIGNED', at: hoursAgo(66), note: 'Assigned to Roads and Public Works, Ward 4 team.' },
+         { status: 'ASSIGNED', at: hoursAgo(66), note: 'Your complaint has been assigned to a civic team.' },
         { status: 'ACCEPTED', at: hoursAgo(40) },
         { status: 'IN_PROGRESS', at: hoursAgo(5), note: 'Crew on site. Expected to finish today.' },
       ],
@@ -204,4 +211,9 @@ function createSeed(now: () => Date): Complaint[] {
       ],
     },
   ];
+}
+
+function toCitizenComplaint(complaint: StoredComplaint): Complaint {
+  const { department: _department, priority: _priority, ...citizenComplaint } = complaint;
+  return structuredClone(citizenComplaint);
 }
