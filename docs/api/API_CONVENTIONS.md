@@ -1,6 +1,6 @@
 # CivicFix API conventions
 
-Status: **Phase 7**. These conventions are implemented in `server/`. Implemented endpoints: health checks, authentication ([AUTHENTICATION.md](AUTHENTICATION.md)), users, departments and memberships ([USERS_DEPARTMENTS_MEMBERSHIPS.md](USERS_DEPARTMENTS_MEMBERSHIPS.md)), complaints ([COMPLAINTS.md](COMPLAINTS.md)) and complaint AI analysis ([../ai/AI_ANALYSIS_PIPELINE.md](../ai/AI_ANALYSIS_PIPELINE.md)). Each future endpoint will be documented in this folder as it ships (see [Documenting endpoints](#documenting-endpoints)).
+Status: **all phases implemented**. Endpoints: health checks, [authentication](AUTHENTICATION.md), [users, departments and memberships](USERS_DEPARTMENTS_MEMBERSHIPS.md), [complaints](COMPLAINTS.md), [AI analysis](../ai/AI_ANALYSIS_PIPELINE.md), [assignment and work orders](ASSIGNMENTS_WORK_ORDERS.md), [evidence, verification and disputes](EVIDENCE_VERIFICATION_DISPUTES.md), [notifications and audit log](NOTIFICATIONS_AUDIT.md), [dashboards](DASHBOARDS.md). The only non-JSON request is the evidence upload (raw file body). Each future endpoint will be documented in this folder as it ships (see [Documenting endpoints](#documenting-endpoints)).
 
 ## 1. Base path and versioning
 

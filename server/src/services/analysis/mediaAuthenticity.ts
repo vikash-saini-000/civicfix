@@ -102,6 +102,28 @@ export function combineSignals(signals: Signal[], visual: ImageAssessment | null
   };
 }
 
+/** Fields stored on the AIAnalysis record for a finished authenticity check. */
+export function mediaRecordFields(result: AuthenticityResult) {
+  return {
+    provider: result.modelMeta?.provider ?? 'civicfix-rules',
+    modelName: result.modelMeta?.model ?? 'metadata-v1',
+    promptVersion: result.modelMeta?.promptVersion,
+    latencyMs: result.modelMeta?.latencyMs,
+    usage: { inputTokens: result.modelMeta?.inputTokens, outputTokens: result.modelMeta?.outputTokens },
+    errorCode: result.visualErrorCode ?? null,
+    authenticity: {
+      outcome: result.outcome,
+      provenance: result.provenance,
+      signals: result.signals,
+      visualModelRun: result.visualModelRun,
+      explanation: result.explanation,
+      reviewRecommended: result.reviewRecommended,
+    },
+    relevance: result.relevance,
+    reviewRecommended: result.reviewRecommended,
+  };
+}
+
 /**
  * Analyses one media file. `declaredType` is what the uploader claimed; the real type is sniffed
  * from the bytes and must match. Throws a 400-style AppError for unsupported or oversized files.

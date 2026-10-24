@@ -3,7 +3,7 @@ import { Writable } from 'node:stream';
 import { Router } from 'express';
 import { SignJWT } from 'jose';
 import mongoose from 'mongoose';
-import { MongoMemoryServer } from 'mongodb-memory-server-core';
+import { testMongo } from './mongo.js';
 import request from 'supertest';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
@@ -23,9 +23,9 @@ const ORIGIN = 'http://localhost:5173';
 const silent = createLogger({ logLevel: 'silent', nodeEnv: 'test' });
 const PASSWORD = 'correct horse battery';
 
-let mongo: MongoMemoryServer;
+let mongo: Awaited<ReturnType<typeof testMongo>>;
 beforeAll(async () => {
-  mongo = await MongoMemoryServer.create();
+  mongo = await testMongo();
   await mongoose.connect(mongo.getUri(), { dbName: 'civicfix-auth-test' });
   await Promise.all([User.syncIndexes(), AuthSession.syncIndexes(), DepartmentMembership.syncIndexes(), Department.syncIndexes()]);
 });

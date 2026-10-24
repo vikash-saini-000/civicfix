@@ -10,6 +10,8 @@ import { ConfigError, loadConfig } from './config/env.js';
 import './models/index.js';
 import { createAnalysisService } from './services/analysis/index.js';
 import { createLogger } from './utils/logger.js';
+import { createLocalStorage, disabledStorage } from './storage/index.js';
+import { DEFAULT_VERIFICATION_POLICY } from './services/resolution.js';
 import { createShutdown } from './utils/shutdown.js';
 
 async function main() {
@@ -43,11 +45,14 @@ async function main() {
   let isShuttingDown = () => false;
   // AI analysis runs in the background; with AI_PROVIDER=disabled only the rule-based duplicate check runs.
   const provider = config.ai.provider === 'anthropic' ? createAnthropicProvider(config.ai) : disabledProvider;
-  const analysis = createAnalysisService({ provider, logger, maxAttempts: config.ai.maxAttempts, autoRun: true });
-  logger.info({ aiProvider: provider.name, aiModel: provider.enabled ? provider.model : undefined }, 'analysis configured');
+  const storage = config.storage.provider === 'local' ? createLocalStorage(config.storage.localDir) : disabledStorage;
+  const analysis = createAnalysisService({ provider, logger, maxAttempts: config.ai.maxAttempts, autoRun: true, storage });
+  logger.info({ aiProvider: provider.name, aiModel: provider.enabled ? provider.model : undefined, storage: config.storage.provider }, 'analysis configured');
 
   const app = createApp({
     analysis,
+    storage,
+    verificationPolicy: { ...DEFAULT_VERIFICATION_POLICY, autoApprove: config.verification.autoApprove, disputeWindowDays: config.verification.disputeWindowDays },
     config,
     logger,
     isDatabaseConnected,

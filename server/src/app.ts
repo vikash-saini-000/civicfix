@@ -9,7 +9,12 @@ import { disabledProvider } from './ai/types.js';
 import { createAuthService } from './auth/authService.js';
 import { safeError } from './config/database.js';
 import { createAnalysisService, type AnalysisService } from './services/analysis/index.js';
-import { apiRouter } from './routes/api.js';
+import { createEventBus, type EventBus } from './events/bus.js';
+import type { AssignmentPolicy } from './services/workOrders.js';
+import { buildApi } from './routes/api.js';
+import { setAuditLogger } from './services/audit.js';
+import type { VerificationPolicy } from './services/resolution.js';
+import type { ObjectStorage } from './storage/index.js';
 import type { AuthRateLimits } from './routes/auth.js';
 import type { RateLimitOptions } from './middleware/rateLimit.js';
 import { healthRouter, type HealthDeps } from './routes/health.js';
@@ -33,6 +38,13 @@ export interface AppDeps extends HealthDeps {
    * nothing runs in the background) so tests stay deterministic.
    */
   analysis?: AnalysisService;
+  /** Domain event bus (notifications subscribe to it). Created if omitted. */
+  events?: EventBus;
+  assignmentPolicy?: AssignmentPolicy;
+  verificationPolicy?: VerificationPolicy;
+  /** Evidence file storage. Defaults to disabled (uploads answer 503). */
+  storage?: ObjectStorage;
+  uploadLimit?: RateLimitOptions;
 }
 
 /**
@@ -41,12 +53,14 @@ export interface AppDeps extends HealthDeps {
  * Request lifecycle:
  *   request ID → request log → security headers → CORS → JSON body (size limit)
  *   → /health/*                                   (infrastructure, no DB guard)
- *   → /api/v1: DB guard → JSON content-type → feature routes
+ *   → /api/v1: DB guard → evidence upload (raw file body) → JSON content-type → feature routes
  *   → 404 → central error handler
  */
 export function createApp(deps: AppDeps): Express {
   const { config, logger } = deps;
   const app = express();
+  const events = deps.events ?? createEventBus(logger);
+  setAuditLogger(logger);
 
   app.disable('x-powered-by');
   // Number of trusted proxy hops; 0 means req.ip is the socket address.
@@ -81,10 +95,9 @@ export function createApp(deps: AppDeps): Express {
     }
     next();
   });
-  api.use(requireJson);
-  api.use(
-    deps.api ??
-      apiRouter({
+  const routers = deps.api
+    ? { router: deps.api, uploads: null }
+    : buildApi({
         authService: createAuthService(config.auth, logger),
         authConfig: config.auth,
         corsOrigins: config.corsOrigins,
@@ -93,8 +106,16 @@ export function createApp(deps: AppDeps): Express {
         analysisRerunLimit: deps.analysisRerunLimit,
         analysisService: deps.analysis ?? createAnalysisService({ provider: disabledProvider, logger, maxAttempts: 1, autoRun: false }),
         onHookError: (err) => logger.error({ err: safeError(err) }, 'complaint hook failed'),
-      }),
-  );
+        events,
+        logger,
+        assignmentPolicy: deps.assignmentPolicy,
+        verificationPolicy: deps.verificationPolicy,
+        storage: deps.storage,
+        uploadLimit: deps.uploadLimit,
+      });
+  if (routers.uploads) api.use(routers.uploads);
+  api.use(requireJson);
+  api.use(routers.router);
   app.use('/api/v1', api);
 
   // 6. Not found, then the central error handler (must be last).

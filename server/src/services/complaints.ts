@@ -6,6 +6,7 @@ import { canTransition, transitionFor, type ComplaintAction } from '../policies/
 import { AppError, notFoundError, validationError } from '../utils/errors.js';
 import { paginationMeta, toSkipLimit, type PaginationMeta, type PaginationQuery } from '../validation/pagination.js';
 import { auditUserAction } from './audit.js';
+import type { EventBus } from '../events/bus.js';
 
 // ---- access policy -----------------------------------------------------------
 //
@@ -48,6 +49,8 @@ export interface ComplaintView {
   status: ComplaintStatus;
   statusHistory: { status: ComplaintStatus; at: string; note: string | null }[];
   rejectionReason: string | null;
+  resolvedAt: string | null;
+  closedAt: string | null;
   /** Present for staff and admins only. Contact details are never included. */
   reporter?: { id: string; name: string };
   /** Actions the caller may perform now; a UI hint only. The server re-checks every action. */
@@ -71,6 +74,8 @@ type ComplaintDoc = {
   status: ComplaintStatus;
   statusHistory: { status: ComplaintStatus; at: Date; publicNote?: string | null }[];
   rejectionReason?: string | null;
+  resolvedAt?: Date | null;
+  closedAt?: Date | null;
   createdAt?: Date;
   updatedAt?: Date;
 };
@@ -100,6 +105,8 @@ function toView(p: Principal, c: ComplaintDoc, relation: Relation): ComplaintVie
     status: c.status,
     statusHistory: c.statusHistory.map((h) => ({ status: h.status, at: h.at.toISOString(), note: h.publicNote ?? null })),
     rejectionReason: c.rejectionReason ?? null,
+    resolvedAt: c.resolvedAt?.toISOString() ?? null,
+    closedAt: c.closedAt?.toISOString() ?? null,
     allowedActions: allowedActions(p, c),
     createdAt: (c.createdAt ?? new Date()).toISOString(),
     updatedAt: (c.updatedAt ?? new Date()).toISOString(),
@@ -152,6 +159,7 @@ export interface ComplaintServiceHooks {
   /** Called after a complaint is stored (e.g. to queue AI analysis). Errors are logged, never surfaced. */
   onCreated?: (complaintId: Types.ObjectId) => Promise<unknown>;
   onHookError?: (err: unknown) => void;
+  events?: EventBus;
 }
 
 export function createComplaintService(hooks: ComplaintServiceHooks = {}) {
@@ -213,6 +221,7 @@ export function createComplaintService(hooks: ComplaintServiceHooks = {}) {
         requestId,
         changes: [{ field: 'publicId', after: complaint.publicId }],
       });
+      await hooks.events?.emit('complaint.created', { complaintId: String(complaint._id) }, `${complaint._id}:created`);
       // Analysis must never block or fail submission.
       if (hooks.onCreated) await hooks.onCreated(complaint._id).catch((err) => hooks.onHookError?.(err));
       return reload(p, complaint._id, 'reporter');
@@ -300,6 +309,10 @@ export function createComplaintService(hooks: ComplaintServiceHooks = {}) {
           { field: 'status', before: before.status, after: 'UNDER_REVIEW' },
         ],
       });
+      if (before.status !== 'UNDER_REVIEW') {
+        await hooks.events?.emit('complaint.status_changed', { complaintId: String(c._id), from: before.status, to: 'UNDER_REVIEW' }, `${c._id}:UNDER_REVIEW:classify`);
+      }
+      await hooks.events?.emit('assignment.review_required', { complaintId: String(c._id), departmentId: String(dept._id), reasons: [] }, `${c._id}:routed:${dept._id}:${Date.now()}`);
       return reload(p, c._id, relation);
     },
 
@@ -320,6 +333,7 @@ export function createComplaintService(hooks: ComplaintServiceHooks = {}) {
         reason,
         changes: [{ field: 'status', before: c.status, after: 'REJECTED' }],
       });
+      await hooks.events?.emit('complaint.status_changed', { complaintId: String(c._id), from: c.status, to: 'REJECTED', note: reason }, `${c._id}:REJECTED`);
       return reload(p, c._id, relation);
     },
   };

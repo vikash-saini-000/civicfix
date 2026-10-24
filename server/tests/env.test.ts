@@ -29,6 +29,8 @@ describe('loadConfig', () => {
       trustProxyHops: 0,
       auth: { jwtSecret: JWT, accessTokenTtlSeconds: 900, refreshTokenTtlDays: 7, cookieSecure: false, cookieSameSite: 'lax' },
       ai: { provider: 'disabled', apiKey: undefined, model: 'claude-opus-5-5', timeoutMs: 30_000, maxAttempts: 3 },
+      storage: { provider: 'disabled', localDir: './uploads' },
+      verification: { autoApprove: false, disputeWindowDays: 14 },
     });
   });
 

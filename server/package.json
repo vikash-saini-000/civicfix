@@ -13,7 +13,9 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "db:sync-indexes": "tsx src/scripts/syncIndexes.ts",
-    "user:create": "tsx src/scripts/createUser.ts"
+    "user:create": "tsx src/scripts/createUser.ts",
+    "user:create:prod": "node dist/scripts/createUser.js",
+    "db:sync-indexes:prod": "node dist/scripts/syncIndexes.js"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^1.3.0",

@@ -63,6 +63,7 @@ export const ASSIGNED_WORK_ORDER_STATUSES: readonly WorkOrderStatus[] = [
   'VERIFICATION_REQUIRED',
 ];
 
+/** AUTO = deterministic backend rule (never the AI on its own); MANAGER / ADMIN_OVERRIDE = human decision. */
 export const ASSIGNMENT_SOURCES = ['AUTO', 'MANAGER', 'ADMIN_OVERRIDE'] as const;
 export type AssignmentSource = (typeof ASSIGNMENT_SOURCES)[number];
 
@@ -76,6 +77,8 @@ export const REVIEW_REASONS = [
   'AMBIGUOUS_DUPLICATE',
   'POLICY_REQUIRES_APPROVAL',
   'AI_UNAVAILABLE',
+  'CATEGORY_CONFLICT',
+  'ASSIGNEE_DECLINED',
 ] as const;
 export type ReviewReason = (typeof REVIEW_REASONS)[number];
 
@@ -120,7 +123,8 @@ export const RELEVANCE_ASSESSMENTS = ['APPEARS_RELATED', 'APPEARS_UNRELATED', 'U
 export const VERIFICATION_OUTCOMES = ['SUFFICIENT', 'INSUFFICIENT', 'UNCERTAIN'] as const;
 export type VerificationOutcome = (typeof VERIFICATION_OUTCOMES)[number];
 
-export const EVIDENCE_PURPOSES = ['COMPLAINT_REPORT', 'RESOLUTION', 'DISPUTE'] as const;
+/** COMPLAINT_REPORT/ADDITIONAL: from the citizen. WORK_PROGRESS/RESOLUTION: from the assignee. DISPUTE: citizen, for a dispute. */
+export const EVIDENCE_PURPOSES = ['COMPLAINT_REPORT', 'ADDITIONAL', 'WORK_PROGRESS', 'RESOLUTION', 'DISPUTE'] as const;
 export type EvidencePurpose = (typeof EVIDENCE_PURPOSES)[number];
 
 export const MEDIA_TYPES = ['IMAGE', 'VIDEO'] as const;
@@ -153,12 +157,15 @@ export const RESOURCE_TYPES = [
 export type ResourceType = (typeof RESOURCE_TYPES)[number];
 
 export const NOTIFICATION_TYPES = [
+  'COMPLAINT_RECEIVED',
   'COMPLAINT_STATUS_CHANGED',
   'WORK_ORDER_ASSIGNED',
   'MANAGER_REVIEW_REQUIRED',
   'EVIDENCE_REQUESTED',
   'DISPUTE_SUBMITTED',
   'DISPUTE_DECIDED',
+  'WORK_ORDER_UPDATED',
+  'VERIFICATION_NEEDED',
 ] as const;
 export type NotificationType = (typeof NOTIFICATION_TYPES)[number];
 
@@ -169,6 +176,7 @@ export const DELIVERY_STATUSES = ['PENDING', 'SENT', 'FAILED'] as const;
 export type DeliveryStatus = (typeof DELIVERY_STATUSES)[number];
 
 export const DISPUTE_STATUSES = ['OPEN', 'UNDER_REVIEW', 'UPHELD', 'DISMISSED', 'WITHDRAWN'] as const;
+export const DISPUTE_CATEGORIES = ['NOT_FIXED', 'POOR_QUALITY', 'WRONG_LOCATION', 'OTHER'] as const;
 export type DisputeStatus = (typeof DISPUTE_STATUSES)[number];
 
 export const FEEDBACK_MODERATION_STATES = ['VISIBLE', 'HIDDEN'] as const;

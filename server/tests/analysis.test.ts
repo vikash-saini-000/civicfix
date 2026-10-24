@@ -2,7 +2,7 @@
 import { Writable } from 'node:stream';
 import Anthropic from '@anthropic-ai/sdk';
 import mongoose from 'mongoose';
-import { MongoMemoryServer } from 'mongodb-memory-server-core';
+import { testMongo } from './mongo.js';
 import request from 'supertest';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createAnthropicProvider } from '../src/ai/anthropicProvider.js';
@@ -61,9 +61,9 @@ const good = (overrides: Partial<ClassificationOutput> = {}): ClassificationOutp
 
 // ---- environment --------------------------------------------------------------------
 const MODELS = [User, Department, DepartmentMembership, AuthSession, Complaint, Counter, Evidence, AIAnalysis] as unknown as (typeof User)[];
-let mongo: MongoMemoryServer;
+let mongo: Awaited<ReturnType<typeof testMongo>>;
 beforeAll(async () => {
-  mongo = await MongoMemoryServer.create();
+  mongo = await testMongo();
   await mongoose.connect(mongo.getUri(), { dbName: 'civicfix-phase7-test' });
   await Promise.all(MODELS.map((m) => m.syncIndexes()));
 });

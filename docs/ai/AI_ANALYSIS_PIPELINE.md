@@ -1,6 +1,6 @@
 # AI analysis pipeline
 
-Status: **Phase 7, implemented in `server/`.** Code: `server/src/ai/` (provider adapter, prompts, output schemas) and `server/src/services/analysis/` (jobs, classification, duplicates, media authenticity).
+Status: **Phase 7, implemented in `server/`; photo checks wired to uploads in Phase 9; AI suggestions feed the Phase 8 routing rules.** Code: `server/src/ai/` (provider adapter, prompts, output schemas) and `server/src/services/analysis/` (jobs, classification, duplicates, media authenticity).
 
 AI output is **advice for a human**. It never assigns a department, sets priority, links duplicates, rejects a complaint, or changes evidence. The only automatic status change is `REPORTED → UNDER_REVIEW` once classification succeeds.
 
@@ -16,7 +16,7 @@ staff / admin ─────▶ GET /complaints/:publicId/analysis  (safe summa
 admin ─────────────▶ POST /complaints/:publicId/analysis (re-run)
 ```
 
-Media authenticity (`analyzeEvidence`) is implemented and tested, but **not triggered by anything yet**: there is no upload or object storage until Phase 9. When uploads land, the upload handler calls `analysis.analyzeEvidence(evidenceId, bytes)`.
+Media authenticity runs as a background job (`MEDIA_AUTHENTICITY`) for **every uploaded evidence file** (Phase 9): the runner reads the bytes from storage and stores the result. Resolution verification treats flagged, unfinished or inconclusive checks as `UNCERTAIN`. When both TRIAGE and DUPLICATE_CANDIDATES finish, the Phase 8 rules decide whether to assign automatically ([ASSIGNMENTS_WORK_ORDERS.md](../api/ASSIGNMENTS_WORK_ORDERS.md)).
 
 ## 2. Provider abstraction
 

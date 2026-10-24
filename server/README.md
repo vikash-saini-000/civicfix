@@ -1,8 +1,8 @@
 # CivicFix server
 
-**Status:** Phase 7. Models, the Express foundation, the MongoDB connection, health checks, logging, graceful shutdown, request validation, the response envelope, JWT authentication with role guards, user profiles, departments, memberships and complaint APIs (create, scoped list and read, manual classify and reject) and the AI analysis pipeline (classification, duplicate candidates, media-authenticity analyzer) exist. There are no work-order or evidence-upload APIs yet.
+**Status:** all 12 backend phases implemented: auth and roles, departments, complaints, AI analysis, rule-based assignment and work orders, evidence and resolution verification, disputes, notifications, audit API, dashboards, and the Phase 12 security review and deployment readiness. See [`docs/DEPLOYMENT.md`](../docs/DEPLOYMENT.md) and [`docs/SECURITY_REVIEW.md`](../docs/SECURITY_REVIEW.md).
 
-For client developers: [`API_CONVENTIONS.md`](../docs/api/API_CONVENTIONS.md), [`AUTHENTICATION.md`](../docs/api/AUTHENTICATION.md) [`USERS_DEPARTMENTS_MEMBERSHIPS.md`](../docs/api/USERS_DEPARTMENTS_MEMBERSHIPS.md) and [`COMPLAINTS.md`](../docs/api/COMPLAINTS.md).
+For client developers: every API contract is in [`docs/api/`](../docs/api/) (start with [`API_CONVENTIONS.md`](../docs/api/API_CONVENTIONS.md)); the AI pipeline is in [`docs/ai/AI_ANALYSIS_PIPELINE.md`](../docs/ai/AI_ANALYSIS_PIPELINE.md).
 
 Stack: Node 22+ (ESM), TypeScript, Express 5, Mongoose 9, zod 4, pino, Vitest.
 
@@ -23,6 +23,7 @@ npm run dev               # tsx watch, http://localhost:4000
 | `npm run build` / `npm start` | Compile to `dist/` / run the compiled server |
 | `npm run typecheck` | Type-check source and tests |
 | `npm test` | Run all tests |
+| `npm run user:create:prod` / `npm run db:sync-indexes:prod` | Same scripts from the compiled build (no dev dependencies needed) |
 | `npm run user:create` | Create an account outside public registration, e.g. the first `PLATFORM_ADMIN` (password from `NEW_USER_PASSWORD`) |
 | `npm run db:sync-indexes` | Create/update model indexes (needed in production, where auto-indexing is off). It also drops indexes no longer in the schemas. |
 
@@ -48,6 +49,9 @@ npm run dev               # tsx watch, http://localhost:4000
 | `AI_PROVIDER` | `disabled` | `disabled` or `anthropic`; see [AI_ANALYSIS_PIPELINE.md](../docs/ai/AI_ANALYSIS_PIPELINE.md) |
 | `ANTHROPIC_API_KEY` | none | Required when `AI_PROVIDER=anthropic`; never logged |
 | `AI_MODEL` / `AI_TIMEOUT_MS` / `AI_MAX_ATTEMPTS` | `claude-opus-5-5` / `30000` / `3` | Model ID, per-call timeout, attempts per job |
+| `STORAGE_PROVIDER` / `STORAGE_LOCAL_DIR` | `disabled` / `./uploads` | Evidence file storage: `disabled` (uploads return 503) or `local` |
+| `AUTO_APPROVE_RESOLUTIONS` | `false` | Approve fully clean resolutions without a human (product-owner decision) |
+| `DISPUTE_WINDOW_DAYS` | `14` | Days after resolution in which citizens may dispute (1–90) |
 | `TRUST_PROXY` | `0` | Number of reverse proxies in front of the API (0–10). Set it when deployed behind one, so client IPs and rate limits are correct. |
 
 ## Startup, database and shutdown
@@ -157,7 +161,7 @@ Throw `AppError` for expected failures. Anything else is logged with a redacted 
 npm test
 ```
 
-Database tests start throwaway in-memory MongoDB servers (`mongodb-memory-server-core`), never the local service or a shared database. To use the installed binary instead of downloading one:
+Tests share **one** throwaway in-memory MongoDB started by `tests/globalSetup.ts` (`mongodb-memory-server-core`); each test file uses its own database name. They never touch the local service or a shared database. To use the installed binary instead of downloading one:
 
 ```bash
 MONGOMS_SYSTEM_BINARY="C:/Program Files/MongoDB/Server/8.0/bin/mongod.exe" npm test
@@ -174,6 +178,12 @@ MONGOMS_SYSTEM_BINARY="C:/Program Files/MongoDB/Server/8.0/bin/mongod.exe" npm t
 | `tests/departments.test.ts` | Profile updates, department CRUD and deactivation, membership add, reactivate, role change and revoke, per-department authority, concurrency, audit |
 | `tests/complaints.test.ts` | Complaint creation (field allowlist, IDs, rate limit), visibility per role and department, filters, classify and reject lifecycle, races |
 | `tests/analysis.test.ts` | AI pipeline with scripted providers: classification validation and side effects, retries, failures, crash recovery, duplicates, analysis API access, Claude adapter mapping, media authenticity |
+| `tests/workOrders.test.ts` | Automatic routing rules, manual assignment, review queue, work-order lifecycle, transfer and cancel, races |
+| `tests/resolution.test.ts` | Evidence upload, type and size checks, access, storage off; resolution checks, verifier decisions, disputes, close, feedback |
+| `tests/notifications.test.ts` | Notification recipients, privacy, no duplicates, failure isolation; audit API access, filters, sanitising |
+| `tests/dashboards.test.ts` | Citizen, member, manager and admin metrics, scoping, empty states, range validation |
+| `tests/e2e.test.ts` | Full workflow through the HTTP API: setup → complaint → AI → assignment → work → verification → dispute → rework → close |
+| `tests/security.test.ts` | Every protected route needs a token; production headers, CORS, error safety, body limits |
 | `tests/conventions.test.ts` | Validation details, unknown-field rejection, 415, pagination limits, success envelope, error mapping (409/400/500), rate limit, log content |
 
 ## Transactions

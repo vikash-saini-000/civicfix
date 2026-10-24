@@ -1,7 +1,7 @@
 // Real MongoDB (in-memory) connection lifecycle, readiness and graceful shutdown.
 import { createServer, request as httpRequest, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { MongoMemoryServer } from 'mongodb-memory-server-core';
+import { testMongo } from './mongo.js';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createApp } from '../src/app.js';
@@ -19,9 +19,9 @@ import { testAuthConfig } from './helpers.js';
 const logger = createLogger({ logLevel: 'silent', nodeEnv: 'test' });
 
 describe('database connection', () => {
-  let mongo: MongoMemoryServer;
+  let mongo: Awaited<ReturnType<typeof testMongo>>;
   beforeAll(async () => {
-    mongo = await MongoMemoryServer.create();
+    mongo = await testMongo();
   });
   afterAll(async () => {
     await disconnectDatabase();
@@ -46,13 +46,13 @@ describe('database connection', () => {
     const [a, b] = await Promise.all([connectDatabase(opts), connectDatabase(opts)]);
     expect(a).toBe(b);
     expect(isDatabaseConnected()).toBe(true);
-    expect(await pingDatabase()).toBe(true);
+    expect(await pingDatabase(5000)).toBe(true);
 
     const app = createApp({
       config: { nodeEnv: 'test', corsOrigins: [], jsonBodyLimit: '100kb', auth: testAuthConfig },
       logger,
       isDatabaseConnected,
-      checkDatabase: () => pingDatabase(),
+      checkDatabase: () => pingDatabase(5000),
       isShuttingDown: () => false,
     });
     expect((await request(app).get('/health/ready')).status).toBe(200);

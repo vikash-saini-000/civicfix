@@ -5,7 +5,7 @@ import { AIAnalysis, Complaint, Department, Evidence } from '../../models/index.
 import { AppError, notFoundError } from '../../utils/errors.js';
 import type { Logger } from '../../utils/logger.js';
 import { relationTo, type ComplaintService } from '../complaints.js';
-import { analyzeMedia } from './mediaAuthenticity.js';
+import { analyzeMedia, mediaRecordFields } from './mediaAuthenticity.js';
 import { createAnalysisRunner, JOB_TYPES, type JobType, type RunnerOptions } from './runner.js';
 
 export { JOB_TYPES, type JobType };
@@ -117,6 +117,7 @@ export function createAnalysisService(opts: AnalysisServiceOptions) {
 
     /** Queues classification + duplicate check for a new complaint. */
     queueForNewComplaint: (complaintId: Types.ObjectId) => runner.enqueue(complaintId, JOB_TYPES, 'COMPLAINT_CREATED'),
+    queueForEvidence: (complaintId: Types.ObjectId, evidenceId: Types.ObjectId, requestedBy?: string) => runner.enqueueMedia(complaintId, evidenceId, requestedBy),
 
     /** Staff/admin summary. Reporters get 403; anyone who can't see the complaint gets 404. */
     async summary(p: Principal, publicId: string, complaints: ComplaintService) {
@@ -161,27 +162,7 @@ export function createAnalysisService(opts: AnalysisServiceOptions) {
       };
       try {
         const result = await analyzeMedia(bytes, ev.contentType, { complaintTitle: complaint.title, complaintDescription: complaint.description }, provider);
-        return await AIAnalysis.create({
-          ...base,
-          status: 'SUCCEEDED',
-          completedAt: new Date(),
-          provider: result.modelMeta?.provider ?? 'civicfix-rules',
-          modelName: result.modelMeta?.model ?? 'metadata-v1',
-          promptVersion: result.modelMeta?.promptVersion,
-          latencyMs: result.modelMeta?.latencyMs,
-          usage: { inputTokens: result.modelMeta?.inputTokens, outputTokens: result.modelMeta?.outputTokens },
-          errorCode: result.visualErrorCode,
-          authenticity: {
-            outcome: result.outcome,
-            provenance: result.provenance,
-            signals: result.signals,
-            visualModelRun: result.visualModelRun,
-            explanation: result.explanation,
-            reviewRecommended: result.reviewRecommended,
-          },
-          relevance: result.relevance,
-          reviewRecommended: result.reviewRecommended,
-        });
+        return await AIAnalysis.create({ ...base, status: 'SUCCEEDED', completedAt: new Date(), ...mediaRecordFields(result) });
       } catch (err) {
         const code = err instanceof AppError ? err.code : 'INTERNAL_ERROR';
         await AIAnalysis.create({

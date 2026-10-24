@@ -1,6 +1,6 @@
 // Phase 5: user profiles, departments and department memberships.
 import mongoose from 'mongoose';
-import { MongoMemoryServer } from 'mongodb-memory-server-core';
+import { testMongo } from './mongo.js';
 import request from 'supertest';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createApp } from '../src/app.js';
@@ -20,9 +20,9 @@ const app = createApp({
   authRateLimits: { register: many, loginPerIp: many, loginPerIpAndEmail: many, refresh: many },
 });
 
-let mongo: MongoMemoryServer;
+let mongo: Awaited<ReturnType<typeof testMongo>>;
 beforeAll(async () => {
-  mongo = await MongoMemoryServer.create();
+  mongo = await testMongo();
   await mongoose.connect(mongo.getUri(), { dbName: 'civicfix-phase5-test' });
   await Promise.all([User, Department, DepartmentMembership, AuthSession, WorkOrder].map((m) => (m as typeof User).syncIndexes()));
 });

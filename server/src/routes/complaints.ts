@@ -7,6 +7,7 @@ import { input, validate } from '../middleware/validate.js';
 import { CATEGORIES, COMPLAINT_STATUSES, PRIORITIES } from '../models/enums.js';
 import { JOB_TYPES, type AnalysisService, type JobType } from '../services/analysis/index.js';
 import type { ClassifyInput, ComplaintService, CreateComplaintInput, ListComplaintsQuery } from '../services/complaints.js';
+import type { ManualAssignInput, WorkOrderService } from '../services/workOrders.js';
 import { sendCreated, sendSuccess } from '../utils/respond.js';
 import { complaintPublicId, objectId, text } from '../validation/common.js';
 import { paginationQuery, sortQuery } from '../validation/pagination.js';
@@ -59,6 +60,14 @@ const classifyBody = z.strictObject({
   note: text(1, 500).optional(),
 });
 const rejectBody = z.strictObject({ reason: text(5, 1000) });
+// Routing decision. The actor and decision source come from the authenticated user, never from the body.
+const assignBody = z.strictObject({
+  departmentId: objectId,
+  category: z.enum(CATEGORIES).optional(),
+  priority: z.enum(PRIORITIES),
+  assigneeId: objectId.optional(),
+  reason: text(3, 1000),
+});
 const rerunBody = z.strictObject({
   types: z
     .array(z.enum(JOB_TYPES))
@@ -72,6 +81,7 @@ export interface ComplaintsRouterDeps {
   authService: AuthService;
   complaintService: ComplaintService;
   analysisService: AnalysisService;
+  workOrderService: WorkOrderService;
   /** Per-user limit on new complaints. */
   createLimit?: RateLimitOptions;
   /** Per-admin limit on analysis re-runs (each may call the AI provider). */
@@ -86,6 +96,7 @@ export function complaintsRouter({
   authService,
   complaintService,
   analysisService,
+  workOrderService,
   createLimit = DEFAULT_CREATE_LIMIT,
   rerunLimit = DEFAULT_RERUN_LIMIT,
 }: ComplaintsRouterDeps): Router {
@@ -121,6 +132,12 @@ export function complaintsRouter({
     const { publicId } = input<Params>(req, 'params');
     const { reason } = input<{ reason: string }>(req, 'body');
     sendSuccess(res, { complaint: await complaintService.reject(req.auth!, publicId, reason, req.id) });
+  });
+
+  router.post('/:publicId/assign', validate({ params, body: assignBody }), async (req, res) => {
+    const { publicId } = input<Params>(req, 'params');
+    const workOrder = await workOrderService.assignComplaint(req.auth!, publicId, input<ManualAssignInput>(req, 'body'), req.id);
+    sendCreated(res, { workOrder }, `/api/v1/work-orders/${workOrder.publicId}`);
   });
 
   // --- AI analysis (staff and admins) ---

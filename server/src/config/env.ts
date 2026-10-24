@@ -22,6 +22,22 @@ export interface Config {
   trustProxyHops: number;
   auth: AuthConfig;
   ai: AiConfig;
+  storage: StorageConfig;
+  verification: VerificationConfig;
+}
+
+export const STORAGE_PROVIDERS = ['disabled', 'local'] as const;
+export interface StorageConfig {
+  provider: (typeof STORAGE_PROVIDERS)[number];
+  /** Directory for STORAGE_PROVIDER=local. */
+  localDir: string;
+}
+
+export interface VerificationConfig {
+  /** Approve a resolution without a human when every rule passes. Off unless the product owner turns it on. */
+  autoApprove: boolean;
+  /** Days after resolution during which the citizen may dispute (and staff may not close). */
+  disputeWindowDays: number;
 }
 
 export const AI_PROVIDERS = ['disabled', 'anthropic'] as const;
@@ -144,6 +160,13 @@ export function loadConfig(env: Env = process.env): Config {
   const aiTimeoutMs = int('AI_TIMEOUT_MS', 30_000, 5_000, 120_000);
   const aiMaxAttempts = int('AI_MAX_ATTEMPTS', 3, 1, 5);
 
+  const storageProvider = (read('STORAGE_PROVIDER') ?? 'disabled') as StorageConfig['provider'];
+  if (!STORAGE_PROVIDERS.includes(storageProvider)) issues.push(`STORAGE_PROVIDER must be one of ${STORAGE_PROVIDERS.join(', ')}`);
+  const storageLocalDir = read('STORAGE_LOCAL_DIR') ?? './uploads';
+  const autoApproveRaw = read('AUTO_APPROVE_RESOLUTIONS') ?? 'false';
+  if (!['true', 'false'].includes(autoApproveRaw)) issues.push('AUTO_APPROVE_RESOLUTIONS must be true or false');
+  const disputeWindowDays = int('DISPUTE_WINDOW_DAYS', 14, 1, 90);
+
   const logLevel = (read('LOG_LEVEL') ?? (nodeEnv === 'test' ? 'silent' : 'info')) as LogLevel;
   if (!LOG_LEVELS.includes(logLevel)) issues.push(`LOG_LEVEL must be one of ${LOG_LEVELS.join(', ')}`);
 
@@ -162,6 +185,8 @@ export function loadConfig(env: Env = process.env): Config {
     trustProxyHops,
     auth: { jwtSecret, accessTokenTtlSeconds, refreshTokenTtlDays, cookieSecure, cookieSameSite },
     ai: { provider: aiProvider, apiKey: anthropicKey, model: aiModel, timeoutMs: aiTimeoutMs, maxAttempts: aiMaxAttempts },
+    storage: { provider: storageProvider, localDir: storageLocalDir },
+    verification: { autoApprove: autoApproveRaw === 'true', disputeWindowDays },
   };
 }
 

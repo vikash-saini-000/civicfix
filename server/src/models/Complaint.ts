@@ -1,6 +1,6 @@
 import { Schema, model, type InferSchemaType } from 'mongoose';
 import { geoPointSchema } from './common.js';
-import { CATEGORIES, COMPLAINT_STATUSES, DUPLICATE_LINK_SOURCES, PRIORITIES } from './enums.js';
+import { CATEGORIES, COMPLAINT_STATUSES, DUPLICATE_LINK_SOURCES, PRIORITIES, REVIEW_REASONS } from './enums.js';
 
 export const PUBLIC_ID_PATTERN = /^CF-\d{4}-\d{5,}$/;
 
@@ -62,6 +62,20 @@ const complaintSchema = new Schema(
     },
 
     duplicateOf: { type: duplicateLinkSchema },
+
+    // Latest automatic-routing evaluation. Present when the case needs a human routing decision.
+    routingReview: {
+      type: new Schema(
+        {
+          reasons: { type: [{ type: String, enum: REVIEW_REASONS }], default: [] },
+          evaluatedAt: { type: Date, required: true },
+          policyVersion: { type: String, required: true, maxlength: 40 },
+        },
+        { _id: false },
+      ),
+    },
+    resolvedAt: { type: Date },
+    closedAt: { type: Date },
   },
   { timestamps: true },
 );
@@ -79,6 +93,7 @@ complaintSchema.index({ status: 1, createdAt: -1 }); // triage / admin views
 complaintSchema.index({ confirmedCategory: 1, status: 1, createdAt: -1 });
 complaintSchema.index({ location: '2dsphere' }); // nearby-duplicate search
 complaintSchema.index({ 'duplicateOf.complaint': 1 }, { sparse: true }); // reports linked to a canonical issue
+complaintSchema.index({ department: 1, resolvedAt: 1 }, { sparse: true }); // resolution-time metrics
 
 export type ComplaintFields = InferSchemaType<typeof complaintSchema>;
 export const Complaint = model('Complaint', complaintSchema);

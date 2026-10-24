@@ -1,5 +1,5 @@
 import { Schema, model, type InferSchemaType } from 'mongoose';
-import { DISPUTE_STATUSES } from './enums.js';
+import { DISPUTE_CATEGORIES, DISPUTE_STATUSES } from './enums.js';
 
 type DisputeThis = { status?: string };
 const isDecided = function (this: DisputeThis) {
@@ -24,6 +24,9 @@ const disputeSchema = new Schema(
     workOrder: { type: Schema.Types.ObjectId, ref: 'WorkOrder', required: true, immutable: true },
     submittedBy: { type: Schema.Types.ObjectId, ref: 'User', required: true, immutable: true },
     reason: { type: String, required: true, trim: true, minlength: 10, maxlength: 2000, immutable: true },
+    category: { type: String, enum: DISPUTE_CATEGORIES, required: true, default: 'NOT_FIXED', immutable: true },
+    // Equals `complaint` while the dispute is OPEN or UNDER_REVIEW; unique, so one open dispute per complaint.
+    activeFor: { type: Schema.Types.ObjectId },
     priorResolution: { type: priorResolutionSchema, required: true, immutable: true },
     // Dispute photos are Evidence records with purpose DISPUTE.
 
@@ -37,6 +40,7 @@ const disputeSchema = new Schema(
 );
 
 disputeSchema.index({ complaint: 1, createdAt: -1 });
+disputeSchema.index({ activeFor: 1 }, { unique: true, sparse: true });
 disputeSchema.index({ status: 1, createdAt: 1 }); // review queue
 disputeSchema.index({ submittedBy: 1, createdAt: -1 });
 

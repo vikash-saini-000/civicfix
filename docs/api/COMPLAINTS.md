@@ -1,6 +1,6 @@
 # Complaints API
 
-Status: **Phases 6–7, implemented in `server/`.** All endpoints need `Authorization: Bearer <accessToken>` ([AUTHENTICATION.md](AUTHENTICATION.md)). Envelope, errors and pagination follow [API_CONVENTIONS.md](API_CONVENTIONS.md). Roles and memberships: [USERS_DEPARTMENTS_MEMBERSHIPS.md](USERS_DEPARTMENTS_MEMBERSHIPS.md).
+Status: **Phases 6–7, implemented in `server/`.** Later lifecycle steps: [assignment and work orders](ASSIGNMENTS_WORK_ORDERS.md), [resolution, disputes and closing](EVIDENCE_VERIFICATION_DISPUTES.md). All endpoints need `Authorization: Bearer <accessToken>` ([AUTHENTICATION.md](AUTHENTICATION.md)). Envelope, errors and pagination follow [API_CONVENTIONS.md](API_CONVENTIONS.md). Roles and memberships: [USERS_DEPARTMENTS_MEMBERSHIPS.md](USERS_DEPARTMENTS_MEMBERSHIPS.md).
 
 ## Endpoints
 

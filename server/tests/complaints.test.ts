@@ -1,12 +1,12 @@
 // Phase 6: complaint creation, scoped listing and retrieval, triage actions.
 import mongoose from 'mongoose';
-import { MongoMemoryServer } from 'mongodb-memory-server-core';
+import { testMongo } from './mongo.js';
 import request from 'supertest';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createApp, type AppDeps } from '../src/app.js';
 import { hashPassword } from '../src/auth/password.js';
 import { AuditLog, AuthSession, Complaint, Counter, Department, DepartmentMembership, User } from '../src/models/index.js';
-import { canTransition, COMPLAINT_TRANSITIONS, transitionFor } from '../src/policies/complaintLifecycle.js';
+import { canTransition, complaintActionFor, COMPLAINT_TRANSITIONS, transitionFor } from '../src/policies/complaintLifecycle.js';
 import { createLogger } from '../src/utils/logger.js';
 import { testAuthConfig } from './helpers.js';
 
@@ -26,9 +26,9 @@ const makeApp = (overrides: Partial<AppDeps> = {}) =>
 const app = makeApp();
 
 const MODELS = [User, Department, DepartmentMembership, AuthSession, Complaint, Counter] as unknown as (typeof User)[];
-let mongo: MongoMemoryServer;
+let mongo: Awaited<ReturnType<typeof testMongo>>;
 beforeAll(async () => {
-  mongo = await MongoMemoryServer.create();
+  mongo = await testMongo();
   await mongoose.connect(mongo.getUri(), { dbName: 'civicfix-phase6-test' });
   await Promise.all(MODELS.map((m) => m.syncIndexes()));
 });
@@ -371,20 +371,24 @@ describe('triage actions', () => {
   it('exposes no generic update or self-service status changes', async () => {
     const c = await file(alice);
     expect((await call('patch', `/complaints/${c.publicId}`, alice, { status: 'RESOLVED' })).status).toBe(404);
-    for (const action of ['resolve', 'close', 'assign', 'accept']) {
+    for (const action of ['resolve', 'status', 'accept', 'complete']) {
       expect((await call('post', `/complaints/${c.publicId}/${action}`, admin, {})).status).toBe(404);
     }
+    // The assignment action exists (Phase 8) but validates its body and never takes a status.
+    expect((await call('post', `/complaints/${c.publicId}/assign`, alice, { status: 'RESOLVED' })).status).toBe(400);
     expect((await Complaint.findOne({ publicId: c.publicId }).lean())!.status).toBe('REPORTED');
   });
 });
 
 describe('lifecycle policy', () => {
-  it('defines later-phase transitions but keeps them unreachable', () => {
+  it('allows only the defined moves, with no shortcuts', () => {
     expect(COMPLAINT_TRANSITIONS.length).toBeGreaterThan(10);
-    expect(() => transitionFor('assign')).toThrow(/phase 8/);
-    expect(() => transitionFor('close')).toThrow(/phase 9/);
-    expect(canTransition('close', 'RESOLVED')).toBe(false);
+    expect(transitionFor('close')).toEqual(expect.objectContaining({ from: ['RESOLVED'], to: 'CLOSED' }));
     expect(canTransition('reject', 'IN_PROGRESS')).toBe(false);
     expect(canTransition('classify', 'REPORTED')).toBe(true);
+    expect(complaintActionFor('REPORTED', 'RESOLVED')).toBeNull();
+    expect(complaintActionFor('CLOSED', 'IN_PROGRESS')).toBeNull();
+    expect(complaintActionFor('REJECTED', 'UNDER_REVIEW')).toBeNull();
+    expect(complaintActionFor('IN_PROGRESS', 'RESOLUTION_SUBMITTED')).toBe('submit_resolution');
   });
 });

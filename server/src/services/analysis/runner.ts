@@ -6,15 +6,21 @@
 // Limits: one process polls; there is no cross-process priority or fairness. Fine at this scale.
 import { Types } from 'mongoose';
 import { AiProviderError, type AiProvider } from '../../ai/types.js';
-import { AIAnalysis, AuditLog, Complaint, Department } from '../../models/index.js';
+import { AIAnalysis, AuditLog, Complaint, Department, Evidence } from '../../models/index.js';
+import type { ObjectStorage } from '../../storage/index.js';
+import { analyzeMedia, mediaRecordFields } from './mediaAuthenticity.js';
 import type { AnalysisTrigger, Category } from '../../models/enums.js';
 import { transitionFor } from '../../policies/complaintLifecycle.js';
 import { safeError } from '../../config/database.js';
 import type { Logger } from '../../utils/logger.js';
+import type { EventBus } from '../../events/bus.js';
+import { AppError } from '../../utils/errors.js';
 import { DEFAULT_DUPLICATE_SETTINGS, DUPLICATE_METHOD, findDuplicateCandidates, type DuplicateSettings } from './duplicates.js';
 
 export const JOB_TYPES = ['TRIAGE', 'DUPLICATE_CANDIDATES'] as const;
 export type JobType = (typeof JOB_TYPES)[number];
+/** Everything the runner processes, including per-evidence media checks. */
+const RUNNABLE_TYPES = [...JOB_TYPES, 'MEDIA_AUTHENTICITY'] as const;
 
 export interface RunnerOptions {
   provider: AiProvider;
@@ -26,6 +32,8 @@ export interface RunnerOptions {
   leaseMs?: number;
   retryBaseMs?: number;
   duplicateSettings?: DuplicateSettings;
+  /** Where evidence bytes are read from for MEDIA_AUTHENTICITY jobs. */
+  storage?: ObjectStorage;
   /** Cap on departments offered to the model in one prompt. */
   maxDepartmentsInPrompt?: number;
 }
@@ -45,17 +53,27 @@ export function createAnalysisRunner(opts: RunnerOptions) {
 
   const running = new Set<Promise<void>>();
   let timer: NodeJS.Timeout | undefined;
+  // Called after a TRIAGE or DUPLICATE_CANDIDATES job reaches a final state (e.g. automatic assignment).
+  let onJobFinished: ((complaintId: Types.ObjectId) => Promise<unknown>) | null = null;
+  let events: EventBus | null = null;
   let stopping = false;
 
   /** Creates a PENDING job, or returns the one already active for the same complaint + type. */
-  async function enqueueOne(complaintId: Types.ObjectId | string, type: JobType, trigger: AnalysisTrigger, requestedBy?: string) {
-    const key = activeKey(complaintId, type);
+  async function enqueueOne(
+    complaintId: Types.ObjectId | string,
+    type: JobType | 'MEDIA_AUTHENTICITY',
+    trigger: AnalysisTrigger,
+    requestedBy?: string,
+    evidence?: Types.ObjectId | string,
+  ) {
+    const key = activeKey(complaintId, type, evidence);
     for (let attempt = 0; attempt < 3; attempt++) {
-      const latest = await AIAnalysis.findOne({ complaint: complaintId, analysisType: type, evidence: null }).sort({ analysisVersion: -1 }).select('analysisVersion').lean();
+      const latest = await AIAnalysis.findOne({ complaint: complaintId, analysisType: type, evidence: evidence ?? null }).sort({ analysisVersion: -1 }).select('analysisVersion').lean();
       try {
         return await AIAnalysis.create({
           complaint: complaintId,
           analysisType: type,
+          evidence,
           status: 'PENDING',
           analysisVersion: (latest?.analysisVersion ?? 0) + 1,
           trigger,
@@ -63,8 +81,8 @@ export function createAnalysisRunner(opts: RunnerOptions) {
           activeJobKey: key,
           attempts: 0,
           nextAttemptAt: new Date(),
-          provider: type === 'TRIAGE' ? provider.name : DUPLICATE_METHOD.provider,
-          modelName: type === 'TRIAGE' ? provider.model : DUPLICATE_METHOD.modelName,
+          provider: type === 'DUPLICATE_CANDIDATES' ? DUPLICATE_METHOD.provider : provider.name,
+          modelName: type === 'DUPLICATE_CANDIDATES' ? DUPLICATE_METHOD.modelName : provider.model,
         });
       } catch (err) {
         if (!isDuplicateKey(err)) throw err;
@@ -83,10 +101,13 @@ export function createAnalysisRunner(opts: RunnerOptions) {
     );
   }
 
-  async function failOrRetry(job: { _id: Types.ObjectId; attempts: number; analysisType: string }, err: unknown) {
+  /** Returns true when the job reached a final state. */
+  async function failOrRetry(job: { _id: Types.ObjectId; attempts: number; analysisType: string }, err: unknown): Promise<boolean> {
     const providerErr = err instanceof AiProviderError ? err : null;
-    const retryable = providerErr ? providerErr.retryable : true; // unexpected errors: treat as transient
-    const code = providerErr?.kind ?? 'INTERNAL_ERROR';
+    // Known application errors (e.g. unsupported file) are final; unexpected errors are treated as transient.
+    const appErr = err instanceof AppError ? err : null;
+    const retryable = providerErr ? providerErr.retryable : !appErr;
+    const code = providerErr?.kind ?? appErr?.code ?? 'INTERNAL_ERROR';
     if (retryable && job.attempts < opts.maxAttempts) {
       // Exponential backoff with jitter, capped at one minute.
       const delay = Math.min(60_000, retryBaseMs * 2 ** (job.attempts - 1)) + Math.floor(Math.random() * retryBaseMs);
@@ -95,11 +116,12 @@ export function createAnalysisRunner(opts: RunnerOptions) {
         { $set: { status: 'PENDING', errorCode: code, nextAttemptAt: new Date(Date.now() + delay) }, $unset: { lockedUntil: 1 } },
       );
       logger.warn({ analysisId: String(job._id), type: job.analysisType, attempt: job.attempts, errorCode: code }, 'analysis attempt failed; will retry');
-      return;
+      return false;
     }
     await finish(job._id, { status: code === 'INVALID_OUTPUT' ? 'INVALID_OUTPUT' : 'FAILED', errorCode: code });
     const level = code === 'NOT_CONFIGURED' ? 'info' : 'warn';
     logger[level]({ analysisId: String(job._id), type: job.analysisType, attempts: job.attempts, errorCode: code, err: providerErr ? undefined : safeError(err) }, 'analysis failed');
+    return true;
   }
 
   async function runTriage(job: { _id: Types.ObjectId; complaint: Types.ObjectId }) {
@@ -165,6 +187,7 @@ export function createAnalysisRunner(opts: RunnerOptions) {
         reason: 'automatic analysis completed',
         changes: [{ field: 'status', before: 'REPORTED', after: 'UNDER_REVIEW' }],
       });
+      await events?.emit('complaint.status_changed', { complaintId: String(job.complaint), from: 'REPORTED', to: 'UNDER_REVIEW' }, `${job.complaint}:UNDER_REVIEW:ai:${job._id}`);
     }
   }
 
@@ -186,12 +209,24 @@ export function createAnalysisRunner(opts: RunnerOptions) {
     });
   }
 
+  async function runMedia(job: { _id: Types.ObjectId; evidence?: Types.ObjectId | null }) {
+    const ev = job.evidence ? await Evidence.findById(job.evidence).lean() : null;
+    if (!ev) {
+      await finish(job._id, { status: 'FAILED', errorCode: 'EVIDENCE_NOT_FOUND' });
+      return;
+    }
+    if (!opts.storage?.enabled) throw new AiProviderError('UNAVAILABLE', 'storage not available');
+    const [bytes, complaint] = await Promise.all([opts.storage.get(ev.storageKey), Complaint.findById(ev.complaint).select('title description').lean()]);
+    const result = await analyzeMedia(bytes, ev.contentType, { complaintTitle: complaint?.title ?? '', complaintDescription: complaint?.description ?? '' }, provider);
+    await finish(job._id, { status: 'SUCCEEDED', ...mediaRecordFields(result) });
+  }
+
   /** Claims one due job (PENDING and due, or RUNNING with an expired lease). */
   async function claim() {
     const now = new Date();
     return AIAnalysis.findOneAndUpdate(
       {
-        analysisType: { $in: JOB_TYPES },
+        analysisType: { $in: RUNNABLE_TYPES },
         $or: [
           { status: 'PENDING', nextAttemptAt: { $lte: now } },
           { status: 'RUNNING', lockedUntil: { $lt: now } },
@@ -205,16 +240,21 @@ export function createAnalysisRunner(opts: RunnerOptions) {
   async function processOne(): Promise<boolean> {
     const job = await claim();
     if (!job) return false;
+    let final = true;
     if (job.attempts > opts.maxAttempts) {
       await finish(job._id, { status: 'FAILED', errorCode: job.errorCode ?? 'MAX_ATTEMPTS' });
-      return true;
+    } else {
+      try {
+        if (job.analysisType === 'TRIAGE') await runTriage(job);
+        else if (job.analysisType === 'MEDIA_AUTHENTICITY') await runMedia(job);
+        else await runDuplicates(job);
+        logger.info({ analysisId: String(job._id), type: job.analysisType, attempt: job.attempts }, 'analysis completed');
+      } catch (err) {
+        final = await failOrRetry(job, err);
+      }
     }
-    try {
-      if (job.analysisType === 'TRIAGE') await runTriage(job);
-      else await runDuplicates(job);
-      logger.info({ analysisId: String(job._id), type: job.analysisType, attempt: job.attempts }, 'analysis completed');
-    } catch (err) {
-      await failOrRetry(job, err);
+    if (final && onJobFinished && job.analysisType !== 'MEDIA_AUTHENTICITY') {
+      await onJobFinished(job.complaint).catch((err) => logger.error({ err: safeError(err) }, 'post-analysis hook failed'));
     }
     return true;
   }
@@ -237,6 +277,12 @@ export function createAnalysisRunner(opts: RunnerOptions) {
   }
 
   return {
+    /** Queues an authenticity check for one stored evidence file. */
+    async enqueueMedia(complaintId: Types.ObjectId | string, evidenceId: Types.ObjectId | string, requestedBy?: string) {
+      const job = await enqueueOne(complaintId, 'MEDIA_AUTHENTICITY', 'EVIDENCE_ADDED', requestedBy, evidenceId);
+      kick();
+      return job;
+    },
     async enqueue(complaintId: Types.ObjectId | string, types: readonly JobType[], trigger: AnalysisTrigger, requestedBy?: string) {
       const jobs = [];
       for (const type of types) jobs.push(await enqueueOne(complaintId, type, trigger, requestedBy));
@@ -244,6 +290,12 @@ export function createAnalysisRunner(opts: RunnerOptions) {
       return jobs;
     },
     kick,
+    setJobFinishedHook(fn: (complaintId: Types.ObjectId) => Promise<unknown>) {
+      onJobFinished = fn;
+    },
+    setEventBus(bus: EventBus) {
+      events = bus;
+    },
     /** Processes due jobs until none are left (tests and scripts). */
     async drain(maxJobs = 100) {
       for (let i = 0; i < maxJobs && (await processOne()); i++);
