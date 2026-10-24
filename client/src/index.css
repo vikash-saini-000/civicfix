@@ -16,7 +16,10 @@
   --color-primary: #0f62fe;
   --color-primary-hover: #0050e6;
   --color-primary-active: #002d9c;
+  --color-secondary: #393939;
+  --color-accent: #0f62fe;
   --color-on-primary: #ffffff;
+  --color-on-warning: #161616;
   --color-ink: #161616;
   --color-ink-muted: #525252;
   --color-ink-subtle: #6f6f6f;
@@ -36,6 +39,8 @@
   --color-caution: #ff832b;
   --color-error: #da1e28;
   --color-info: #0043ce;
+  --color-focus: #0f62fe;
+  --color-surface-3: #f4f4f4;
 
   /* Tag fills (light background + dark text, all >= 4.5:1) */
   --color-tag-gray-bg: #e0e0e0;
@@ -55,6 +60,19 @@
 
   /* Floating layers only (map popups, menus). Cards stay flat. */
   --shadow-float: 0 2px 6px rgb(0 0 0 / 0.2);
+  --shadow-focus: 0 0 0 2px #ffffff, 0 0 0 4px #0f62fe;
+
+  /* Named layout and interaction tokens. The 4px base grid remains the default. */
+  --spacing-page: 1rem;
+  --spacing-section: 3rem;
+  --spacing-control: 3rem;
+  --radius-control: 0;
+  --radius-card: 0;
+  --transition-fast: 100ms;
+  --transition-standard: 200ms;
+  --content-width: 66rem;
+  --content-width-readable: 42rem;
+  --content-width-wide: 1056px;
 
   --breakpoint-md: 42rem; /* 672px */
   --breakpoint-lg: 66rem; /* 1056px */
@@ -81,8 +99,21 @@
   }
   /* Carbon-style focus: 2px blue, always visible for keyboard users */
   :focus-visible {
-    outline: 2px solid var(--color-primary);
-    outline-offset: -2px;
+    outline: 2px solid var(--color-focus);
+    outline-offset: 2px;
+  }
+  button,
+  a,
+  select,
+  input[type='checkbox'],
+  input[type='radio'] {
+    cursor: pointer;
+  }
+  button:disabled,
+  input:disabled,
+  select:disabled,
+  textarea:disabled {
+    cursor: not-allowed;
   }
   @media (prefers-reduced-motion: reduce) {
     *,

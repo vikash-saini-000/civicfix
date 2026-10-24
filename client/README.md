@@ -10,6 +10,7 @@ Citizen web app: report a problem, list my complaints, track a complaint's statu
 cd client
 npm install
 npm run dev        # http://localhost:5173
+npm run test       # focused unit and route tests
 npm run build      # type-check + production build
 ```
 
@@ -17,17 +18,197 @@ npm run build      # type-check + production build
 
 | Path | What it holds |
 |---|---|
+| `src/app/` | Application shell and centralized route configuration |
 | `src/index.css` | Design tokens (Tailwind v4 `@theme`) and base styles |
-| `src/lib/domain.ts` | Complaint types, the 11 blueprint statuses, citizen-facing labels, priorities, categories |
-| `src/api/` | `CivicFixApi` interface, mock implementation, and the single switch in `index.ts` |
+| `src/lib/domain.ts` | Complaint types, the 11 blueprint statuses, citizen-facing labels, priorities, categories, and safe unknown-status fallback |
+| `src/lib/complaints.ts` | Authorized complaint list presentation helpers, client-side filtering/sorting, location summaries, and safe load errors |
+| `src/api/` | `CivicFixApi` interface, HTTP client, deterministic mock implementation, configuration, and errors |
 | `src/components/` | Shared UI: Button, fields, StatusTag, PriorityBadge, Notification, LocationPicker, PhotoInput, StatusTracker, Layout |
-| `src/pages/` | Home, Report a problem, My complaints, Complaint detail |
+| `src/pages/` | Home, Citizen dashboard, Report a problem, My complaints, Complaint detail |
+
+## API mode
+
+Copy `.env.example` to `.env.local` when you want to make the mode explicit:
+
+```bash
+VITE_CIVICFIX_API_MODE=mock
+VITE_CIVICFIX_API_BASE_URL=
+VITE_CIVICFIX_API_TIMEOUT_MS=10000
+VITE_CIVICFIX_AUTH_MODE=mock
+```
+
+The development default is `mock`. A production build defaults to `http` and uses the same origin unless
+`VITE_CIVICFIX_API_BASE_URL` is set. A failed HTTP request never falls back to mock data.
+
+## Authentication
+
+The project documents, but does not yet implement, these proposed backend endpoints in
+`docs/CivicFixFullDetails.pdf` (API modules section):
+
+```text
+POST /api/v1/auth/login
+GET  /api/v1/auth/me
+POST /api/v1/auth/logout
+POST /api/v1/auth/register
+```
+
+Phase 2 uses a typed adapter around those proposed contracts. The HTTP adapter sends credentialed requests for a
+cookie/session-based backend and does not persist passwords, session identifiers, access tokens, or refresh tokens in
+browser storage. The backend must provide the actual session, CSRF, response, and role contracts before HTTP auth can
+be considered integrated.
+
+Development mock authentication is memory-only and available only when both API and auth modes are `mock` in a
+development build. It exposes four clearly labeled demo accounts on the login screen. Mock authentication is rejected
+in production configuration and never activates after an HTTP failure.
+
+The frontend route guards are a UX layer only. The backend must independently enforce authentication, role, department
+scope, ownership, and permissions.
+
+## Citizen complaint submission
+
+The canonical citizen submission route is:
+
+```text
+/citizen/complaints/new
+```
+
+`/report` remains as a backwards-compatible alias. Both routes require a validated citizen session through the Phase 2
+route guard.
+
+The only available complaint-creation contract is provisional. The project blueprint proposes `POST /api/v1/complaints`
+(`docs/CivicFixFullDetails.pdf`, API modules section), while the current frontend draft is defined by
+`src/lib/domain.ts` and `src/api/types.ts`:
+
+```text
+title: string
+description: string
+location: { lat: number; lng: number }
+landmark?: string
+selectedCategory: CategoryId | null
+photos: File[]
+```
+
+The client validates the current draft limits (title 5–120 characters, description 10–2000 characters, valid geographic
+coordinates, up to 3 images of 10 MB each). These limits remain provisional until backend validators are available.
+
+The mock adapter accepts image attachments for local UI testing but stores only photo counts; it does not persist image
+contents to a real service. The HTTP adapter currently reports photo uploads as unavailable because no backend upload,
+storage, or signed-URL contract exists. Text and location submission remains isolated behind the typed API boundary.
 
 ## Connecting the backend
 
-Write an HTTP implementation of `CivicFixApi` (`src/api/types.ts`) against `/api/v1/complaints` and export it from `src/api/index.ts` instead of `mockApi`. Set `USING_MOCK_API = false` to hide the demo banner. Pages don't need to change.
+The HTTP implementation of `CivicFixApi` is already present in `src/api/httpApi.ts` and targets the proposed
+`/api/v1/complaints` and authentication contracts. Set both `VITE_CIVICFIX_API_MODE=http` and
+`VITE_CIVICFIX_AUTH_MODE=http` when the backend is ready. The optional authentication-token hook remains available
+for a future contract that explicitly requires bearer authentication.
 
 The mock stores new complaints in `localStorage` and moves each one to "Under review" after 4 seconds to simulate the backend.
+
+## Citizen dashboard and tracking
+
+The Phase 4 canonical routes are:
+
+```text
+/citizen/dashboard
+/citizen/complaints
+/citizen/complaints/:complaintId
+```
+
+`/citizen` remains a compatibility alias for the dashboard. The earlier `/complaints` and `/complaints/:publicId` routes
+remain guarded compatibility aliases; new navigation uses the canonical citizen paths. All citizen routes reuse the Phase 2
+authentication and citizen-role guards.
+
+The current typed API boundary exposes:
+
+```text
+GET /api/v1/complaints
+GET /api/v1/complaints/:id
+```
+
+These routes are proposed in `docs/CivicFixFullDetails.pdf`, API modules section, and are not implemented in this repository.
+The current adapter contract returns an authorized `Complaint[]` list and a `Complaint | null` detail. It has no pagination
+metadata, server-side filter/sort parameters, separate summary-count endpoint, or separate public-history endpoint.
+
+Dashboard counts are exact counts derived from the complete list returned by the adapter for the signed-in citizen. The list
+page applies search, exact-status filtering, exact-category filtering, and sorting locally to that returned authorized data;
+it does not claim server-side pagination. The UI does not expose department, priority, internal assignment, or other
+operational fields in citizen-facing tracking views.
+
+Status history is rendered only from the complaint's typed `history` field, whose draft contract marks notes as citizen-facing.
+An empty history produces an explanation rather than an invented timeline. Unknown future status codes receive a readable
+fallback instead of crashing the page. The HTTP and mock adapters normalize the citizen-safe fields and do not pass through
+department or priority fields. The backend must provide an explicit public-history contract before mixed internal and public
+updates can be safely displayed.
+
+## Department workspace
+
+The Phase 5 read-only staff routes are:
+
+```text
+/department
+/department/complaints
+/department/complaints/:complaintId
+```
+
+Department routes require a department-member or department-manager role plus at least one authenticated department
+membership. Multiple memberships can be selected using a membership-backed `department` query value; arbitrary department
+IDs are rejected. The current repository has no backend department complaint endpoint, so the HTTP adapter fails safely with
+`DEPARTMENT_API_NOT_CONFIGURED` instead of inventing a production route. The development mock adapter exposes the existing
+seed records through a department-scoped, read-only adapter.
+
+## Platform analytics and accessibility
+
+The protected `/admin` route now loads the complete local mock dataset through a mock-only platform analytics capability.
+It provides clearly labelled summary metrics, date-range filtering, category and department tables, report-volume trends,
+and client-derived resolution timing for interface validation. The HTTP adapter intentionally returns
+`PLATFORM_ANALYTICS_NOT_CONFIGURED` because this repository has no authorized platform-wide analytics endpoint, complete
+dataset contract, or historical aggregation API. The frontend does not claim that mock values are production statistics.
+
+The shared shell and high-risk workflows include keyboard route focus management, mobile menu Escape/focus restoration,
+native required-field semantics, associated validation errors, a keyboard-friendly coordinate alternative to the map,
+responsive status/detail layouts, and accessible table alternatives for analytics. Automated coverage remains limited to
+the installed Vitest and Testing Library setup; no axe package or browser viewport test runner is installed.
+
+## Phase 6 and Phase 7 workflow contracts
+
+The blueprint lists proposed AI-analysis, manager-review, work-order evidence, verification, and dispute endpoints, but this
+repository contains no implemented backend for those contracts. The frontend therefore protects `/manager/review` and its
+detail route for department managers, then shows a clear unavailable-contract state without fabricating AI results,
+confidence values, review decisions, queue records, evidence uploads, resolution outcomes, verification history, or dispute
+eligibility. Citizen and department complaint detail pages similarly avoid showing private resolution data or mutation controls
+when the server contract does not provide them.
+
+## Phase 8 notifications and activity history
+
+The authenticated `/notifications` route is present in the shell, but the current repository has no notification endpoint,
+unread-count contract, pagination metadata, or read/mark-all mutation. The page therefore shows an explicit unavailable
+contract state and never fabricates notifications or unread counts. For citizens, the route now provides a clearly labelled
+recent-activity view derived from the authorized complaint `history` already returned by the complaint API; it is not a
+persistent notification feed and has no read/unread state. Staff and administrator views remain unavailable until their own
+authorized notification contract exists. There is no separate activity-feed or audit-log endpoint exposed to the frontend.
+
+## Phase 9 search, filtering, and sorting
+
+Citizen and department complaint lists use the complete authorized arrays returned by their existing adapters. Search, status,
+category, priority, and sorting are local-only operations because the current API exposes no pagination or query-parameter
+contract. Search inputs include accessible labels and clear controls. No unsupported server parameters or result totals are sent
+or claimed.
+
+## Phase 16 synchronization fallback
+
+The repository has no WebSocket, SSE, notification-list, unread-count, read-state, or activity-feed contract. The frontend
+does not invent those endpoints or fabricate notification data. Supported complaint pages and the citizen recent-activity
+view now refresh their authorized data when the browser window regains focus or the tab becomes visible. Complaint details
+also perform a conservative 30-second refresh while visible; the timer is stopped on unmount and refresh requests are not
+allowed to overlap. This is a refresh-on-focus/polling fallback, not instantaneous push delivery.
+
+## Deployment handoff
+
+The app is a Vite React TypeScript client. From `client/`, the production check/build command is `npm run build`; Vite emits
+the static bundle to `client/dist`. Set `VITE_CIVICFIX_API_MODE=http` and `VITE_CIVICFIX_AUTH_MODE=http` for a real backend,
+and set `VITE_CIVICFIX_API_BASE_URL` only when the API is not same-origin. These `VITE_` values are public browser configuration,
+not secrets. The current HTTP adapter still requires the backend's actual session, CSRF, role, complaint, media, analytics, and
+notification contracts before those workflows can be considered production-integrated.
 
 ## Design
 
@@ -40,4 +221,4 @@ Based on the IBM / Carbon reference from the `design-system` project skill (`awe
 - 48px touch targets.
 - Breakpoints at 672px and 1056px.
 
-Not covered yet: dark mode, department and manager views, disputes and feedback, and translated UI text (complaints can already be written in any language).
+Not covered yet: real backend authentication, backend staff complaint contracts, dark mode, manager workflows, disputes and feedback, and translated UI text (complaints can already be written in any language).

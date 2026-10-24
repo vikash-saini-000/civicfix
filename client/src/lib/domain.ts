@@ -14,9 +14,13 @@ export const COMPLAINT_STATUSES = [
   'CLOSED',
   'REJECTED',
 ] as const;
-export type ComplaintStatus = (typeof COMPLAINT_STATUSES)[number];
+export type KnownComplaintStatus = (typeof COMPLAINT_STATUSES)[number];
+/** Backend values may gain a new status before this client is updated. */
+export type ComplaintStatus = KnownComplaintStatus | (string & {});
 
 export type Priority = 'P1' | 'P2' | 'P3' | 'P4';
+/** Backend values may gain a new priority before this client is updated. */
+export type ComplaintPriority = Priority | (string & {});
 
 export const CATEGORIES = [
   { id: 'roads', label: 'Roads and potholes' },
@@ -28,13 +32,26 @@ export const CATEGORIES = [
 ] as const;
 export type CategoryId = (typeof CATEGORIES)[number]['id'];
 
-export function categoryLabel(id: CategoryId | null | undefined): string {
-  return CATEGORIES.find((c) => c.id === id)?.label ?? 'Not chosen yet';
+export function categoryLabel(id: string | null | undefined): string {
+  if (!id) return 'Not chosen yet';
+  return CATEGORIES.find((c) => c.id === id)?.label ?? 'Category unavailable';
 }
 
 export interface GeoPoint {
   lat: number;
   lng: number;
+}
+
+export function isValidGeoPoint(point: GeoPoint | null | undefined): point is GeoPoint {
+  return Boolean(
+    point &&
+      Number.isFinite(point.lat) &&
+      Number.isFinite(point.lng) &&
+      point.lat >= -90 &&
+      point.lat <= 90 &&
+      point.lng >= -180 &&
+      point.lng <= 180,
+  );
 }
 
 export interface StatusEvent {
@@ -51,13 +68,11 @@ export interface Complaint {
   landmark?: string;
   selectedCategory: CategoryId | null;
   confirmedCategory: CategoryId | null;
-  department?: string;
-  priority: Priority | null;
   status: ComplaintStatus;
-  photoCount: number;
+  photoCount?: number;
   createdAt: string;
   updatedAt: string;
-  history: StatusEvent[];
+  history?: StatusEvent[];
 }
 
 export interface NewComplaintInput {
@@ -71,14 +86,14 @@ export interface NewComplaintInput {
 
 type Tone = 'gray' | 'blue' | 'cyan' | 'purple' | 'green' | 'yellow' | 'red';
 
-interface StatusMeta {
+export interface StatusMeta {
   label: string;
   tone: Tone;
   /** Plain-language explanation shown to citizens. */
   citizenText: string;
 }
 
-export const STATUS_META: Record<ComplaintStatus, StatusMeta> = {
+export const STATUS_META: Record<KnownComplaintStatus, StatusMeta> = {
   REPORTED: {
     label: 'Reported',
     tone: 'gray',
@@ -136,15 +151,19 @@ export const STATUS_META: Record<ComplaintStatus, StatusMeta> = {
   },
 };
 
-/** Main path shown as steps in the tracker. Other statuses appear as alerts. */
-export const TRACKER_STEPS: { label: string; statuses: ComplaintStatus[] }[] = [
-  { label: 'Reported', statuses: ['REPORTED'] },
-  { label: 'Under review', statuses: ['UNDER_REVIEW'] },
-  { label: 'Assigned', statuses: ['ASSIGNED', 'ACCEPTED'] },
-  { label: 'In progress', statuses: ['IN_PROGRESS', 'BLOCKED'] },
-  { label: 'Fix submitted', statuses: ['RESOLUTION_SUBMITTED', 'VERIFICATION_REQUIRED'] },
-  { label: 'Resolved', statuses: ['RESOLVED', 'CLOSED'] },
-];
+const UNKNOWN_STATUS_META: StatusMeta = {
+  label: 'Status update',
+  tone: 'gray',
+  citizenText: 'The complaint has a status update that is not described in this version of CivicFix.',
+};
+
+export function getStatusMeta(status: string): StatusMeta {
+  return hasOwn(STATUS_META, status) ? STATUS_META[status as KnownComplaintStatus] : UNKNOWN_STATUS_META;
+}
+
+export function isKnownComplaintStatus(status: string): status is KnownComplaintStatus {
+  return hasOwn(STATUS_META, status);
+}
 
 export const PRIORITY_META: Record<Priority, { label: string; description: string }> = {
   P1: { label: 'P1 Urgent', description: 'Possible danger to people. Handled first.' },
@@ -153,12 +172,29 @@ export const PRIORITY_META: Record<Priority, { label: string; description: strin
   P4: { label: 'P4 Low', description: 'Minor problem.' },
 };
 
-export function formatDateTime(iso: string): string {
-  return new Intl.DateTimeFormat('en-IN', {
-    day: 'numeric',
-    month: 'short',
-    year: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-  }).format(new Date(iso));
+const UNKNOWN_PRIORITY_META = {
+  label: 'Priority update',
+  description: 'The complaint has a priority value that is not described in this version of CivicFix.',
+};
+
+const DATE_TIME_FORMATTER = new Intl.DateTimeFormat('en-IN', {
+  day: 'numeric',
+  month: 'short',
+  year: 'numeric',
+  hour: 'numeric',
+  minute: '2-digit',
+});
+
+export function getPriorityMeta(priority: string): { label: string; description: string } {
+  return hasOwn(PRIORITY_META, priority) ? PRIORITY_META[priority as Priority] : UNKNOWN_PRIORITY_META;
+}
+
+export function formatDateTime(iso: string | null | undefined): string {
+  const date = iso ? new Date(iso) : null;
+  if (!date || Number.isNaN(date.getTime())) return 'Date unavailable';
+  return DATE_TIME_FORMATTER.format(date);
+}
+
+function hasOwn<T extends object>(record: T, key: PropertyKey): key is keyof T {
+  return Object.prototype.hasOwnProperty.call(record, key);
 }

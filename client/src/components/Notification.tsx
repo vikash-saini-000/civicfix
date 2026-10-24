@@ -34,3 +34,6 @@ export function Notification({
     </div>
   );
 }
+
+/** Generic alert name for new screens; Notification remains for existing callers. */
+export { Notification as Alert };
