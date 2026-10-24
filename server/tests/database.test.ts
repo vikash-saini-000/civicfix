@@ -2,16 +2,16 @@
 // Uses the locally installed mongod when MONGOMS_SYSTEM_BINARY is set; otherwise
 // mongodb-memory-server downloads one on first run.
 import mongoose from 'mongoose';
-import { MongoMemoryServer } from 'mongodb-memory-server-core';
+import { testMongo } from './mongo.js';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import * as models from '../src/models/index.js';
 import { AuditLog, Complaint, Department, DepartmentMembership, Feedback, Notification, User } from '../src/models/index.js';
 import { oid, point, validComplaint } from './helpers.js';
 
-let mongo: MongoMemoryServer;
+let mongo: Awaited<ReturnType<typeof testMongo>>;
 
 beforeAll(async () => {
-  mongo = await MongoMemoryServer.create();
+  mongo = await testMongo();
   await mongoose.connect(mongo.getUri(), { dbName: 'civicfix-test' });
   const all = Object.values(models).filter((m): m is mongoose.Model<any> => typeof m === 'function' && 'syncIndexes' in m);
   await Promise.all(all.map((m) => m.syncIndexes()));

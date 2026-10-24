@@ -66,10 +66,16 @@ auditLogSchema.pre('save', function () {
   if (!this.isNew) blocked();
 });
 
+// Untrusted text (e.g. a user's reason) must not be able to forge log lines: strip control characters.
+auditLogSchema.pre('validate', function () {
+  if (typeof this.reason === 'string') this.reason = this.reason.replace(/[\u0000-\u001f\u007f]+/g, ' ');
+});
+
 auditLogSchema.index({ targetType: 1, targetId: 1, createdAt: -1 });
 auditLogSchema.index({ actor: 1, createdAt: -1 }, { sparse: true });
 auditLogSchema.index({ action: 1, createdAt: -1 });
 auditLogSchema.index({ correlationId: 1 }, { sparse: true });
+auditLogSchema.index({ createdAt: -1, _id: -1 }); // admin listing, newest first
 
 export type AuditLogFields = InferSchemaType<typeof auditLogSchema>;
 export const AuditLog = model('AuditLog', auditLogSchema);

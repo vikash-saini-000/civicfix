@@ -16,6 +16,8 @@ const REDACT_PATHS = [
   '*.refreshToken',
   '*.secret',
   '*.mongodbUri',
+  '*.apiKey',
+  '*.jwtSecret',
 ];
 
 /** Structured JSON logger. One per process; pass it down instead of importing a global. */

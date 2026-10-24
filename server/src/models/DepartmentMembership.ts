@@ -8,6 +8,8 @@ const membershipSchema = new Schema(
     role: { type: String, enum: MEMBERSHIP_ROLES, required: true, default: 'MEMBER' },
     // Deactivate instead of deleting so past assignments and audit history stay valid.
     status: { type: String, enum: MEMBERSHIP_STATUSES, required: true, default: 'ACTIVE' },
+    // Staff roster: off-duty members keep their membership but get no new automatic assignments.
+    onDuty: { type: Boolean, required: true, default: true },
   },
   { timestamps: true },
 );

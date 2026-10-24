@@ -27,6 +27,35 @@ const managerReviewSchema = new Schema(
   { _id: false },
 );
 
+/** One entry per operational event. Kept forever so reassignment and cancellation never lose history. */
+const historySchema = new Schema(
+  {
+    at: { type: Date, required: true },
+    action: { type: String, required: true, maxlength: 40, match: /^[a-z_]+$/ },
+    actorType: { type: String, enum: ['USER', 'SYSTEM'], required: true },
+    actor: { type: Schema.Types.ObjectId, ref: 'User' },
+    fromStatus: { type: String, enum: WORK_ORDER_STATUSES },
+    toStatus: { type: String, enum: WORK_ORDER_STATUSES },
+    department: { type: Schema.Types.ObjectId, ref: 'Department' },
+    assignee: { type: Schema.Types.ObjectId, ref: 'User' },
+    reason: { type: String, trim: true, maxlength: 1000 },
+    policyVersion: { type: String, maxlength: 40 },
+  },
+  { _id: false },
+);
+
+const verificationDecisionSchema = new Schema(
+  {
+    decision: { type: String, enum: ['APPROVED', 'REJECTED', 'MORE_EVIDENCE_REQUESTED'], required: true },
+    source: { type: String, enum: ['VERIFIER', 'SYSTEM_POLICY'], required: true },
+    decidedBy: { type: Schema.Types.ObjectId, ref: 'User' },
+    decidedAt: { type: Date, required: true },
+    reason: { type: String, trim: true, maxlength: 1000, required: true },
+    analysis: { type: Schema.Types.ObjectId, ref: 'AIAnalysis' },
+  },
+  { _id: false },
+);
+
 const workNoteSchema = new Schema(
   {
     author: { type: Schema.Types.ObjectId, ref: 'User', required: true },
@@ -40,8 +69,12 @@ type WorkOrderThis = { status?: WorkOrderStatus };
 
 const workOrderSchema = new Schema(
   {
-    // One work order per complaint. Reassignment and reopening update it rather than create another.
+    // Human-readable ID, e.g. WO-2026-00001. Set by the work-order service.
+    publicId: { type: String, trim: true, uppercase: true, match: /^WO-\d{4}-\d{5,}$/, immutable: true },
     complaint: { type: Schema.Types.ObjectId, ref: 'Complaint', required: true, immutable: true },
+    // Equals `complaint` while the work order is open, unset once COMPLETED or CANCELLED.
+    // Unique, so a complaint has at most one open work order; closed ones stay as history.
+    activeFor: { type: Schema.Types.ObjectId },
     department: { type: Schema.Types.ObjectId, ref: 'Department', required: true },
     priority: { type: String, enum: PRIORITIES, required: true },
     status: { type: String, enum: WORK_ORDER_STATUSES, required: true, default: 'PENDING_ASSIGNMENT' },
@@ -61,6 +94,8 @@ const workOrderSchema = new Schema(
     managerReview: { type: managerReviewSchema },
 
     dueAt: { type: Date },
+    // Set once by the SLA monitor when an open work order passes dueAt (alerts are sent once).
+    slaBreachedAt: { type: Date },
     acceptedAt: { type: Date },
     startedAt: { type: Date },
 
@@ -83,16 +118,25 @@ const workOrderSchema = new Schema(
     blockedAt: { type: Date },
 
     notes: { type: [workNoteSchema], default: [] },
+    history: { type: [historySchema], default: [] },
+
+    cancelledAt: { type: Date },
+    cancelReason: { type: String, trim: true, maxlength: 1000 },
 
     // Resolution submission. Files are Evidence records with purpose RESOLUTION.
     completionNotes: { type: String, trim: true, maxlength: 2000 },
     resolutionSubmittedAt: { type: Date },
+    resolutionEvidence: { type: [{ type: Schema.Types.ObjectId, ref: 'Evidence' }], default: [] },
+    verificationDecision: { type: verificationDecisionSchema },
     completedAt: { type: Date },
+    reopenedCount: { type: Number, min: 0, default: 0 },
   },
   { timestamps: true },
 );
 
-workOrderSchema.index({ complaint: 1 }, { unique: true });
+workOrderSchema.index({ publicId: 1 }, { unique: true, sparse: true });
+workOrderSchema.index({ activeFor: 1 }, { unique: true, sparse: true }); // one open work order per complaint
+workOrderSchema.index({ complaint: 1, createdAt: -1 });
 workOrderSchema.index({ department: 1, status: 1, priority: 1, dueAt: 1 }); // department queue
 workOrderSchema.index({ assignee: 1, status: 1, dueAt: 1 }); // personal queue
 // Manager-review queue: pending reviews are those with requestedAt set and no decision yet.
@@ -101,6 +145,7 @@ workOrderSchema.index(
   { partialFilterExpression: { 'managerReview.requestedAt': { $exists: true } } },
 );
 workOrderSchema.index({ status: 1, dueAt: 1 }); // overdue checks
+workOrderSchema.index({ slaBreachedAt: 1, dueAt: 1 }); // SLA monitor
 
 export type WorkOrderFields = InferSchemaType<typeof workOrderSchema>;
 export const WorkOrder = model('WorkOrder', workOrderSchema);

@@ -15,6 +15,8 @@ const departmentSchema = new Schema(
         message: 'categories must be a non-empty list without repeats',
       },
     },
+    // Wards this department serves. Empty = the whole city. Routing uses it with categories.
+    wards: { type: [{ type: Schema.Types.ObjectId, ref: 'Ward' }], default: [] },
     isActive: { type: Boolean, required: true, default: true },
   },
   { timestamps: true },
@@ -23,6 +25,7 @@ const departmentSchema = new Schema(
 // Case-insensitive unique name.
 departmentSchema.index({ name: 1 }, { unique: true, collation: { locale: 'en', strength: 2 } });
 departmentSchema.index({ categories: 1, isActive: 1 });
+departmentSchema.index({ wards: 1 });
 
 export type DepartmentFields = InferSchemaType<typeof departmentSchema>;
 export const Department = model('Department', departmentSchema);

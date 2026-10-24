@@ -1,6 +1,27 @@
 import { Schema, model, type InferSchemaType } from 'mongoose';
 import { geoPointSchema } from './common.js';
-import { CATEGORIES, COMPLAINT_STATUSES, DUPLICATE_LINK_SOURCES, PRIORITIES } from './enums.js';
+import { CATEGORIES, COMPLAINT_STATUSES, DUPLICATE_LINK_SOURCES, PRIORITIES, REVIEW_REASONS } from './enums.js';
+
+/** Questions the triage AI asked the citizen, and their answers. Shown to the reporter and staff. */
+const followUpSchema = new Schema(
+  {
+    questions: { type: [{ type: String, trim: true, minlength: 3, maxlength: 200 }], default: [] },
+    askedAt: { type: Date, required: true },
+    answers: { type: [{ type: String, trim: true, maxlength: 500 }], default: [] },
+    answeredAt: { type: Date },
+  },
+  { _id: false },
+);
+
+/** Rule-based spam signals computed at submission. A flag for humans, never an automatic rejection. */
+const spamCheckSchema = new Schema(
+  {
+    score: { type: Number, min: 0, max: 1, required: true },
+    signals: { type: [{ type: String, match: /^[a-z0-9_]+$/, maxlength: 40 }], default: [] },
+    checkedAt: { type: Date, required: true },
+  },
+  { _id: false },
+);
 
 export const PUBLIC_ID_PATTERN = /^CF-\d{4}-\d{5,}$/;
 
@@ -44,6 +65,8 @@ const complaintSchema = new Schema(
     location: { type: geoPointSchema, required: true },
     landmark: { type: String, trim: true, maxlength: 120 },
     selectedCategory: { type: String, enum: CATEGORIES },
+    // Ward containing the location, resolved by the server at submission (unset if outside every ward).
+    ward: { type: Schema.Types.ObjectId, ref: 'Ward' },
 
     // Set only after validated classification or human review.
     confirmedCategory: { type: String, enum: CATEGORIES },
@@ -62,6 +85,35 @@ const complaintSchema = new Schema(
     },
 
     duplicateOf: { type: duplicateLinkSchema },
+    // On a canonical complaint: how many other reports were linked to it as duplicates.
+    linkedReportCount: { type: Number, min: 0, default: 0 },
+
+    followUp: { type: followUpSchema },
+    spamCheck: { type: spamCheckSchema },
+    // Text embedding for semantic duplicate search. Internal; never returned by the API.
+    textEmbedding: {
+      type: new Schema(
+        { model: { type: String, required: true, maxlength: 100 }, source: { type: String, enum: ['SUMMARY', 'RAW_TEXT'], required: true }, vector: { type: [Number], required: true } },
+        { _id: false },
+      ),
+      select: false,
+    },
+
+    // Latest automatic-routing evaluation. Present when the case needs a human routing decision.
+    routingReview: {
+      type: new Schema(
+        {
+          reasons: { type: [{ type: String, enum: REVIEW_REASONS }], default: [] },
+          // Department the AI suggested (if it serves the location). Its managers see the case in their queue.
+          suggestedDepartment: { type: Schema.Types.ObjectId, ref: 'Department' },
+          evaluatedAt: { type: Date, required: true },
+          policyVersion: { type: String, required: true, maxlength: 40 },
+        },
+        { _id: false },
+      ),
+    },
+    resolvedAt: { type: Date },
+    closedAt: { type: Date },
   },
   { timestamps: true },
 );
@@ -76,9 +128,12 @@ complaintSchema.index({ publicId: 1 }, { unique: true });
 complaintSchema.index({ citizen: 1, updatedAt: -1 }); // "My complaints"
 complaintSchema.index({ department: 1, status: 1, createdAt: -1 }); // department queues
 complaintSchema.index({ status: 1, createdAt: -1 }); // triage / admin views
+complaintSchema.index({ 'routingReview.suggestedDepartment': 1, status: 1 }, { sparse: true }); // manager review queue
 complaintSchema.index({ confirmedCategory: 1, status: 1, createdAt: -1 });
-complaintSchema.index({ location: '2dsphere' }); // nearby-duplicate search
+complaintSchema.index({ location: '2dsphere' }); // nearby-duplicate search, map, hotspots
+complaintSchema.index({ ward: 1, createdAt: -1 }, { sparse: true }); // ward analytics
 complaintSchema.index({ 'duplicateOf.complaint': 1 }, { sparse: true }); // reports linked to a canonical issue
+complaintSchema.index({ department: 1, resolvedAt: 1 }, { sparse: true }); // resolution-time metrics
 
 export type ComplaintFields = InferSchemaType<typeof complaintSchema>;
 export const Complaint = model('Complaint', complaintSchema);

@@ -26,14 +26,20 @@ export function requestContext(logger: Logger): RequestHandler {
   };
 }
 
-/** One log line per finished request: method, path (no query string), status, duration. */
+/** One log line per finished request: method, path (no query string), status, error code, duration. */
 export const requestLogger: RequestHandler = (req, res, next) => {
   const start = process.hrtime.bigint();
   res.on('finish', () => {
     const durationMs = Number(process.hrtime.bigint() - start) / 1e6;
     const level = res.statusCode >= 500 ? 'error' : res.statusCode >= 400 ? 'warn' : 'info';
     req.log[level](
-      { method: req.method, path: req.originalUrl.split('?')[0], status: res.statusCode, durationMs: Math.round(durationMs) },
+      {
+        method: req.method,
+        path: req.originalUrl.split('?')[0],
+        status: res.statusCode,
+        errorCode: res.locals.errorCode,
+        durationMs: Math.round(durationMs),
+      },
       'request completed',
     );
   });
