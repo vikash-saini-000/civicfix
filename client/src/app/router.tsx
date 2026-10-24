@@ -13,6 +13,7 @@ import { HomePage } from '../pages/HomePage';
 import { LoginPage, RegisterPage, RolePlaceholderPage } from '../pages/PlaceholderPages';
 import { ReportPage } from '../pages/ReportPage';
 import { ManagerReviewDetailPage, ManagerReviewPage } from '../pages/ManagerReviewPage';
+import { NotificationsPage } from '../pages/NotificationsPage';
 
 export function AppRoutes() {
   return (
@@ -35,6 +36,7 @@ export function AppRoutes() {
             </PublicOnlyRoute>
           }
         />
+        <Route path="notifications" element={<Authenticated><NotificationsPage /></Authenticated>} />
         <Route path="report" element={<Guarded roles={['citizen']}><ReportPage /></Guarded>} />
         <Route path="citizen/complaints/new" element={<Guarded roles={['citizen']}><ReportPage /></Guarded>} />
         <Route path="citizen/dashboard" element={<Guarded roles={['citizen']}><DashboardPage /></Guarded>} />
@@ -64,6 +66,10 @@ function Guarded({ roles, children }: { roles: Role[]; children: ReactNode }) {
       <RequireRole roles={roles}>{children}</RequireRole>
     </RequireAuth>
   );
+}
+
+function Authenticated({ children }: { children: ReactNode }) {
+  return <RequireAuth>{children}</RequireAuth>;
 }
 
 function DepartmentGuard({ children }: { children: ReactNode }) {

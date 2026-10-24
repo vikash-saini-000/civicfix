@@ -7,7 +7,8 @@ import { Button, ButtonLink } from '../components/Button';
 import { Card } from '../components/Card';
 import { DepartmentContextBar } from '../components/DepartmentContextBar';
 import { EmptyState, ErrorState } from '../components/Feedback';
-import { Select, TextInput } from '../components/Field';
+import { Select } from '../components/Field';
+import { SearchInput } from '../components/SearchInput';
 import { Page } from '../components/Layout';
 import { PriorityBadge, StatusTag } from '../components/Tag';
 import { complaintCategoryOptions, complaintStatusOptions, sortComplaints, staffComplaintSearchText, staffLoadErrorMessage, priorityOptions, type ComplaintSort } from '../lib/department';
@@ -112,7 +113,7 @@ export function DepartmentComplaintsPage({ departmentApi = api }: DepartmentComp
         <div className="flex flex-col gap-6">
           <Card>
             <div className="grid gap-5 md:grid-cols-[minmax(0,2fr)_1fr_1fr]">
-              <TextInput label="Search department complaints" placeholder="Search by title, ID, or location" value={search} onChange={(event) => setSearch(event.target.value)} autoComplete="off" />
+              <SearchInput label="Search department complaints" placeholder="Search by title, ID, or location" value={search} onChange={(event) => setSearch(event.target.value)} onClear={() => setSearch('')} />
               <Select label="Status" value={status} onChange={(event) => setStatus(event.target.value)}>
                 <option value="">All statuses</option>
                 {statusOptions.map((value) => <option key={value} value={value}>{getStatusMeta(value).label}</option>)}

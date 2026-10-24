@@ -87,6 +87,9 @@ describe('department workspace pages', () => {
     renderPage(<DepartmentComplaintsPage departmentApi={api} />, '/department/complaints');
 
     await waitFor(() => expect(screen.getByText('Pothole at market')).toBeInTheDocument());
+    fireEvent.change(screen.getByLabelText('Search department complaints'), { target: { value: 'streetlight' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Clear search department complaints' }));
+    expect(screen.getByText('Pothole at market')).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText('Priority'), { target: { value: 'P3' } });
     expect(screen.getByText('Streetlight near school')).toBeInTheDocument();
     expect(screen.queryByText('Pothole at market')).not.toBeInTheDocument();

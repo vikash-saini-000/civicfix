@@ -165,6 +165,21 @@ confidence values, review decisions, queue records, evidence uploads, resolution
 eligibility. Citizen and department complaint detail pages similarly avoid showing private resolution data or mutation controls
 when the server contract does not provide them.
 
+## Phase 8 notifications and activity history
+
+The authenticated `/notifications` route is present in the shell, but the current repository has no notification endpoint,
+unread-count contract, pagination metadata, or read/mark-all mutation. The page therefore shows an explicit unavailable
+contract state and never fabricates notifications or unread counts. Existing complaint `history` events remain the supported
+activity-history source and are shown on authorized complaint detail pages; there is no separate activity-feed or audit-log
+endpoint exposed to the frontend.
+
+## Phase 9 search, filtering, and sorting
+
+Citizen and department complaint lists use the complete authorized arrays returned by their existing adapters. Search, status,
+category, priority, and sorting are local-only operations because the current API exposes no pagination or query-parameter
+contract. Search inputs include accessible labels and clear controls. No unsupported server parameters or result totals are sent
+or claimed.
+
 ## Design
 
 Based on the IBM / Carbon reference from the `design-system` project skill (`awesome-design-md/design-md/ibm`), adapted for CivicFix:

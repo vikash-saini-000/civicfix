@@ -8,6 +8,7 @@ export function UnsupportedWorkflowPage({
   intro,
   capability,
   explanation,
+  guardrailMessage = 'No AI result, review decision, upload, resolution, verification, or dispute outcome is being simulated here.',
   backTo,
   backLabel,
 }: {
@@ -15,6 +16,7 @@ export function UnsupportedWorkflowPage({
   intro: string;
   capability: string;
   explanation: string;
+  guardrailMessage?: string;
   backTo?: string;
   backLabel?: string;
 }) {
@@ -23,7 +25,7 @@ export function UnsupportedWorkflowPage({
       <Card className="max-w-2xl">
         <Notification kind="info" title={`${capability} is not available yet`}>
           <p>{explanation}</p>
-          <p className="mt-3">No AI result, review decision, upload, resolution, verification, or dispute outcome is being simulated here.</p>
+          <p className="mt-3">{guardrailMessage}</p>
         </Notification>
         {backTo && backLabel && (
           <Link to={backTo} className="mt-5 inline-flex min-h-12 items-center text-primary">

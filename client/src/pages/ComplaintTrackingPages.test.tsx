@@ -113,6 +113,8 @@ describe('ComplaintsPage', () => {
     fireEvent.change(screen.getByLabelText('Search complaints'), { target: { value: 'streetlight' } });
     expect(screen.getByText('Streetlight is out')).toBeInTheDocument();
     expect(screen.queryByText('Pothole at market')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Clear search complaints' }));
+    expect(screen.getByText('Pothole at market')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Reset filters' }));
     expect(screen.getByText('Pothole at market')).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText('Status'), { target: { value: 'REPORTED' } });

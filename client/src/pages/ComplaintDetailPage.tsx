@@ -107,7 +107,7 @@ export function ComplaintDetailPage({ complaintApi = api }: ComplaintDetailPageP
 
       <div className="grid gap-12 lg:grid-cols-[1fr_22rem]">
         <section aria-labelledby="updates-heading">
-          <h2 id="updates-heading" className="mb-4 text-[1.25rem]">Public updates</h2>
+          <h2 id="updates-heading" className="mb-4 text-[1.25rem]">Activity history</h2>
           <StatusHistory complaint={complaint} />
         </section>
 

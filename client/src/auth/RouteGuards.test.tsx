@@ -134,6 +134,21 @@ describe('protected route behavior', () => {
     expect(screen.getByRole('link', { name: 'Department overview' })).toBeInTheDocument();
   });
 
+  it('allows an authenticated user to open the notifications contract state', async () => {
+    renderAt('/notifications', makeAuthApi(makeUser('citizen')));
+
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'Notifications' })).toBeInTheDocument());
+    expect(screen.getByText('Notifications is not available yet')).toBeInTheDocument();
+    expect(screen.queryByText(/unread count:|unread notifications/i)).not.toBeInTheDocument();
+  });
+
+  it('protects notifications from unauthenticated visitors', async () => {
+    renderAt('/notifications', makeAuthApi(null));
+
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'Log in' })).toBeInTheDocument());
+    expect(screen.getByTestId('current-location')).toHaveTextContent('/login?next=%2Fnotifications');
+  });
+
   it('allows only a department manager to open the manager review route', async () => {
     renderAt('/manager/review', makeAuthApi({
       ...makeUser('department_manager'),

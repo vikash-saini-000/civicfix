@@ -24,16 +24,19 @@ const ROLE_NAVIGATION: Record<Role, NavigationItem[]> = {
   citizen: [
     { label: 'Dashboard', to: '/citizen/dashboard', end: true },
     { label: 'My complaints', to: '/citizen/complaints' },
+    { label: 'Notifications', to: '/notifications' },
     { label: 'Report an issue', to: '/citizen/complaints/new' },
   ],
   department_member: [
     { label: 'Department workspace', to: '/department', end: true },
     { label: 'Department complaints', to: '/department/complaints' },
+    { label: 'Notifications', to: '/notifications' },
     { label: 'Assigned work', to: '/department/work' },
   ],
   department_manager: [
     { label: 'Department workspace', to: '/department', end: true },
     { label: 'Department complaints', to: '/department/complaints' },
+    { label: 'Notifications', to: '/notifications' },
     { label: 'Department overview', to: '/manager', end: true },
     { label: 'Complaint review', to: '/manager/review' },
     { label: 'Assignment exceptions', to: '/manager/exceptions' },
@@ -41,6 +44,7 @@ const ROLE_NAVIGATION: Record<Role, NavigationItem[]> = {
   ],
   platform_admin: [
     { label: 'Platform overview', to: '/admin', end: true },
+    { label: 'Notifications', to: '/notifications' },
     { label: 'Departments', to: '/admin/departments' },
     { label: 'Users', to: '/admin/users' },
   ],

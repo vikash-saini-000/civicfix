@@ -5,7 +5,8 @@ import type { ComplaintApi } from '../api/types';
 import { Button, ButtonLink } from '../components/Button';
 import { Card } from '../components/Card';
 import { EmptyState, ErrorState } from '../components/Feedback';
-import { Select, TextInput } from '../components/Field';
+import { Select } from '../components/Field';
+import { SearchInput } from '../components/SearchInput';
 import { Page } from '../components/Layout';
 import { StatusTag } from '../components/Tag';
 import {
@@ -104,12 +105,12 @@ export function ComplaintsPage({ complaintApi = api }: ComplaintsPageProps) {
         <div className="flex flex-col gap-6">
           <Card>
             <div className="grid gap-5 md:grid-cols-[minmax(0,2fr)_1fr_1fr]">
-              <TextInput
+              <SearchInput
                 label="Search complaints"
                 placeholder="Search by title or complaint ID"
                 value={search}
                 onChange={(event) => setSearch(event.target.value)}
-                autoComplete="off"
+                onClear={() => setSearch('')}
               />
               <Select label="Status" value={status} onChange={(event) => setStatus(event.target.value)}>
                 <option value="">All statuses</option>
