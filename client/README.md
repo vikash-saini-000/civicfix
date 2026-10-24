@@ -140,6 +140,31 @@ fallback instead of crashing the page. The HTTP and mock adapters normalize the 
 department or priority fields. The backend must provide an explicit public-history contract before mixed internal and public
 updates can be safely displayed.
 
+## Department workspace
+
+The Phase 5 read-only staff routes are:
+
+```text
+/department
+/department/complaints
+/department/complaints/:complaintId
+```
+
+Department routes require a department-member or department-manager role plus at least one authenticated department
+membership. Multiple memberships can be selected using a membership-backed `department` query value; arbitrary department
+IDs are rejected. The current repository has no backend department complaint endpoint, so the HTTP adapter fails safely with
+`DEPARTMENT_API_NOT_CONFIGURED` instead of inventing a production route. The development mock adapter exposes the existing
+seed records through a department-scoped, read-only adapter.
+
+## Phase 6 and Phase 7 workflow contracts
+
+The blueprint lists proposed AI-analysis, manager-review, work-order evidence, verification, and dispute endpoints, but this
+repository contains no implemented backend for those contracts. The frontend therefore protects `/manager/review` and its
+detail route for department managers, then shows a clear unavailable-contract state without fabricating AI results,
+confidence values, review decisions, queue records, evidence uploads, resolution outcomes, verification history, or dispute
+eligibility. Citizen and department complaint detail pages similarly avoid showing private resolution data or mutation controls
+when the server contract does not provide them.
+
 ## Design
 
 Based on the IBM / Carbon reference from the `design-system` project skill (`awesome-design-md/design-md/ibm`), adapted for CivicFix:
@@ -151,4 +176,4 @@ Based on the IBM / Carbon reference from the `design-system` project skill (`awe
 - 48px touch targets.
 - Breakpoints at 672px and 1056px.
 
-Not covered yet: real backend authentication, dark mode, department and manager workflows, disputes and feedback, and translated UI text (complaints can already be written in any language).
+Not covered yet: real backend authentication, backend staff complaint contracts, dark mode, manager workflows, disputes and feedback, and translated UI text (complaints can already be written in any language).

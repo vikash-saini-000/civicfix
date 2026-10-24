@@ -1,4 +1,5 @@
-import type { Complaint, NewComplaintInput } from '../lib/domain';
+import type { Complaint, ComplaintPriority, NewComplaintInput } from '../lib/domain';
+import type { DepartmentContext } from '../auth/department';
 import type { AuthApi } from './authTypes';
 
 /** Authorized, citizen-safe data needed by the tracking UI. Swap implementation in ./index.ts. */
@@ -9,9 +10,20 @@ export interface ComplaintApi {
   submitComplaint(input: NewComplaintInput, signal?: AbortSignal): Promise<Complaint>;
 }
 
+/** Read-only staff data. Visibility and authorization remain backend responsibilities. */
+export interface StaffComplaint extends Complaint {
+  departmentName: string;
+  priority: ComplaintPriority | null;
+}
+
+export interface DepartmentApi {
+  listDepartmentComplaints(context: DepartmentContext, signal?: AbortSignal): Promise<StaffComplaint[]>;
+  getDepartmentComplaint(context: DepartmentContext, publicId: string, signal?: AbortSignal): Promise<StaffComplaint | null>;
+}
+
 export interface ComplaintApiCapabilities {
   /** True only when the adapter has an approved media-upload contract. */
   readonly photoAttachments: boolean;
 }
 
-export interface CivicFixApi extends ComplaintApi, AuthApi {}
+export interface CivicFixApi extends ComplaintApi, DepartmentApi, AuthApi {}

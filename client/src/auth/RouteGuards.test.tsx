@@ -106,11 +106,59 @@ describe('protected route behavior', () => {
   });
 
   it('renders department navigation only for a department member', async () => {
-    renderAt('/department', makeAuthApi(makeUser('department_member')));
+    renderAt('/department', makeAuthApi({
+      ...makeUser('department_member'),
+      departmentMemberships: [{ departmentId: 'roads', departmentName: 'Roads and Public Works', role: 'member' }],
+    }));
 
-    await waitFor(() => expect(screen.getByRole('heading', { name: 'Department member workspace' })).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole('heading', { name: /workspace$/i })).toBeInTheDocument());
     expect(screen.getByRole('link', { name: 'Department complaints' })).toBeInTheDocument();
     expect(screen.queryByRole('link', { name: 'Platform overview' })).not.toBeInTheDocument();
+  });
+
+  it('fails safely when a department member has no department membership', async () => {
+    renderAt('/department', makeAuthApi(makeUser('department_member')));
+
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'Department access is not configured' })).toBeInTheDocument());
+    expect(screen.queryByRole('link', { name: 'Department complaints' })).toBeInTheDocument();
+  });
+
+  it('allows a department manager with a membership to open the read-only department workspace', async () => {
+    renderAt('/department', makeAuthApi({
+      ...makeUser('department_manager'),
+      departmentMemberships: [{ departmentId: 'roads', departmentName: 'Roads and Public Works', role: 'manager' }],
+    }));
+
+    await waitFor(() => expect(screen.getByRole('heading', { name: /workspace$/i })).toBeInTheDocument());
+    expect(screen.getByRole('link', { name: 'Department complaints' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Department overview' })).toBeInTheDocument();
+  });
+
+  it('allows only a department manager to open the manager review route', async () => {
+    renderAt('/manager/review', makeAuthApi({
+      ...makeUser('department_manager'),
+      departmentMemberships: [{ departmentId: 'roads', departmentName: 'Roads and Public Works', role: 'manager' }],
+    }));
+
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'Manager review' })).toBeInTheDocument());
+    expect(screen.getByText('Manager review queue is not available yet')).toBeInTheDocument();
+  });
+
+  it('denies a department member access to manager review actions', async () => {
+    renderAt('/manager/review', makeAuthApi({
+      ...makeUser('department_member'),
+      departmentMemberships: [{ departmentId: 'roads', departmentName: 'Roads and Public Works', role: 'member' }],
+    }));
+
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'Access not available' })).toBeInTheDocument());
+    expect(screen.queryByRole('heading', { name: 'Manager review' })).not.toBeInTheDocument();
+  });
+
+  it('does not allow a citizen to open department-only pages', async () => {
+    renderAt('/department/complaints', makeAuthApi(makeUser('citizen')));
+
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'Access not available' })).toBeInTheDocument());
+    expect(screen.queryByRole('heading', { name: /complaints$/i })).not.toBeInTheDocument();
   });
 
   it('signs out through the authenticated shell', async () => {

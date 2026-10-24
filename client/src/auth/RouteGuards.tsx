@@ -7,6 +7,7 @@ import { ErrorState, LoadingIndicator } from '../components/Feedback';
 import { Page } from '../components/Layout';
 import { defaultPathForRole, loginPathForDestination } from './navigation';
 import { useAuth } from './AuthContext';
+import { membershipsForUser } from './department';
 
 export function RequireAuth({ children }: { children: ReactNode }) {
   const { state, refreshSession } = useAuth();
@@ -27,6 +28,13 @@ export function RequireRole({ roles, children }: { roles: Role[]; children: Reac
   const { state } = useAuth();
   if (state.status !== 'authenticated' || !state.user) return null;
   if (!roles.includes(state.user.role)) return <ForbiddenPage />;
+  return <>{children}</>;
+}
+
+export function RequireDepartmentMembership({ children }: { children: ReactNode }) {
+  const { state } = useAuth();
+  if (state.status !== 'authenticated' || !state.user) return null;
+  if (membershipsForUser(state.user).length === 0) return <MissingDepartmentContextPage />;
   return <>{children}</>;
 }
 
@@ -71,6 +79,22 @@ export function ForbiddenPage() {
         <p className="mt-2 text-ink-muted">
           If you believe this is incorrect, contact your department or platform administrator. The backend must enforce
           this permission independently of the frontend.
+        </p>
+        <ButtonLink to="/" variant="tertiary" className="mt-5">
+          Return home
+        </ButtonLink>
+      </Card>
+    </Page>
+  );
+}
+
+export function MissingDepartmentContextPage() {
+  return (
+    <Page title="Department access is not configured" intro="Your account does not have an active department membership in the current session.">
+      <Card className="max-w-xl">
+        <h2 className="text-[1.25rem]">Department membership required</h2>
+        <p className="mt-2 text-ink-muted">
+          Ask a platform administrator to add or activate your department membership. No department complaints were loaded.
         </p>
         <ButtonLink to="/" variant="tertiary" className="mt-5">
           Return home

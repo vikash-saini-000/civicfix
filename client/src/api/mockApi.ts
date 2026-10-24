@@ -1,5 +1,7 @@
 import type { Complaint, ComplaintStatus, Priority } from '../lib/domain';
-import type { ComplaintApi } from './types';
+import type { DepartmentContext } from '../auth/department';
+import type { ComplaintApi, DepartmentApi, StaffComplaint } from './types';
+import { ApiError } from './errors';
 
 const STORAGE_KEY = 'civicfix.mock.complaints.v1';
 
@@ -20,7 +22,7 @@ interface StoredComplaint extends Complaint {
   priority: Priority | null;
 }
 
-export function createMockApi(options: MockApiOptions = {}): ComplaintApi {
+export function createMockApi(options: MockApiOptions = {}): ComplaintApi & DepartmentApi {
   const now = options.now ?? (() => new Date());
   const storage = options.storage ?? getBrowserStorage();
   const latencyMs = options.latencyMs ?? 250;
@@ -90,6 +92,27 @@ export function createMockApi(options: MockApiOptions = {}): ComplaintApi {
       save();
       scheduleReview(complaint.publicId);
       return toCitizenComplaint(complaint);
+    },
+
+    async listDepartmentComplaints(context: DepartmentContext, signal) {
+      await delay(latencyMs, signal);
+      const departmentName = context.departmentName?.trim();
+      if (!departmentName) throw new ApiError('The mock department context has no trusted department name.', 403, 'DEPARTMENT_CONTEXT_REQUIRED');
+      return complaints
+        .filter((complaint) => complaint.department?.trim() === departmentName)
+        .map(toStaffComplaint)
+        .filter((complaint): complaint is StaffComplaint => complaint !== null)
+        .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+    },
+
+    async getDepartmentComplaint(context: DepartmentContext, publicId, signal) {
+      await delay(latencyMs, signal);
+      const departmentName = context.departmentName?.trim();
+      if (!departmentName) throw new ApiError('The mock department context has no trusted department name.', 403, 'DEPARTMENT_CONTEXT_REQUIRED');
+      const complaint = complaints.find(
+        (item) => item.publicId === publicId.toUpperCase() && item.department?.trim() === departmentName,
+      );
+      return complaint ? toStaffComplaint(complaint) : null;
     },
   };
 }
@@ -216,4 +239,13 @@ function createSeed(now: () => Date): StoredComplaint[] {
 function toCitizenComplaint(complaint: StoredComplaint): Complaint {
   const { department: _department, priority: _priority, ...citizenComplaint } = complaint;
   return structuredClone(citizenComplaint);
+}
+
+function toStaffComplaint(complaint: StoredComplaint): StaffComplaint | null {
+  if (!complaint.department?.trim()) return null;
+  return {
+    ...toCitizenComplaint(complaint),
+    departmentName: complaint.department.trim(),
+    priority: complaint.priority ?? null,
+  };
 }

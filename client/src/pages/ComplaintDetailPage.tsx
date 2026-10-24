@@ -8,6 +8,7 @@ import { ButtonLink } from '../components/Button';
 import { ErrorState, LoadingIndicator } from '../components/Feedback';
 import { Page } from '../components/Layout';
 import { Notification } from '../components/Notification';
+import { ResolutionWorkflowNotice } from '../components/ResolutionWorkflowNotice';
 import { StatusHistory, StatusTracker } from '../components/StatusTracker';
 import { StatusTag } from '../components/Tag';
 import { isUsableComplaintId } from '../lib/complaints';
@@ -93,6 +94,10 @@ export function ComplaintDetailPage({ complaintApi = api }: ComplaintDetailPageP
           Your complaint ID is <span className="font-mono font-semibold">{complaint.publicId}</span>. Save it to check progress later.
         </Notification>
       )}
+
+      <div className="mb-8">
+        <ResolutionWorkflowNotice status={complaint.status} audience="citizen" />
+      </div>
 
       <section aria-labelledby="progress-heading" className="mb-12">
         <h2 id="progress-heading" className="mb-2 text-[1.25rem]">Current status</h2>

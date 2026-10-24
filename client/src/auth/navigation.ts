@@ -32,6 +32,8 @@ const ROLE_NAVIGATION: Record<Role, NavigationItem[]> = {
     { label: 'Assigned work', to: '/department/work' },
   ],
   department_manager: [
+    { label: 'Department workspace', to: '/department', end: true },
+    { label: 'Department complaints', to: '/department/complaints' },
     { label: 'Department overview', to: '/manager', end: true },
     { label: 'Complaint review', to: '/manager/review' },
     { label: 'Assignment exceptions', to: '/manager/exceptions' },

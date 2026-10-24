@@ -42,4 +42,18 @@ describe('mock CivicFix API', () => {
       photoCount: 0,
     });
   });
+
+  it('returns only complaints for the trusted department context', async () => {
+    const api = createMockApi({ storage: new MemoryStorage(), latencyMs: 0 });
+
+    await expect(api.listDepartmentComplaints({
+      departmentId: 'roads',
+      departmentName: 'Roads and Public Works',
+      membershipRole: 'member',
+    })).resolves.toEqual(expect.arrayContaining([
+      expect.objectContaining({ publicId: 'CF-2026-00141', departmentName: 'Roads and Public Works', priority: 'P2' }),
+    ]));
+    await expect(api.listDepartmentComplaints({ departmentId: 'other', departmentName: 'Other department', membershipRole: 'member' })).resolves.toEqual([]);
+    await expect(api.listDepartmentComplaints({ departmentId: 'roads', membershipRole: 'member' })).rejects.toMatchObject({ status: 403 });
+  });
 });

@@ -1,8 +1,9 @@
 import type { Complaint, NewComplaintInput } from '../lib/domain';
+import type { DepartmentContext } from '../auth/department';
 import type { AuthSession, AuthUser, LoginCredentials } from './authTypes';
 import { parseComplaint, parseComplaintList } from './complaintContract';
 import { ApiError } from './errors';
-import type { CivicFixApi } from './types';
+import type { CivicFixApi, StaffComplaint } from './types';
 
 export interface HttpApiOptions {
   baseUrl: string;
@@ -58,6 +59,14 @@ export class HttpCivicFixApi implements CivicFixApi {
     return this.request<unknown>('/api/v1/complaints', { method: 'POST', body, signal }).then(parseComplaint);
   }
 
+  listDepartmentComplaints(_context: DepartmentContext, _signal?: AbortSignal): Promise<StaffComplaint[]> {
+    return Promise.reject(departmentContractUnavailable());
+  }
+
+  getDepartmentComplaint(_context: DepartmentContext, _publicId: string, _signal?: AbortSignal): Promise<StaffComplaint | null> {
+    return Promise.reject(departmentContractUnavailable());
+  }
+
   private async request<T>(
     path: string,
     options: { method?: string; body?: BodyInit | object; signal?: AbortSignal } = {},
@@ -104,6 +113,10 @@ export class HttpCivicFixApi implements CivicFixApi {
       window.clearTimeout(timeout);
     }
   }
+}
+
+function departmentContractUnavailable(): ApiError {
+  return new ApiError('Department complaint access is not configured for the backend contract yet.', 501, 'DEPARTMENT_API_NOT_CONFIGURED');
 }
 
 async function readResponse(response: Response): Promise<unknown> {

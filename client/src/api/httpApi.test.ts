@@ -157,4 +157,14 @@ describe('HttpCivicFixApi', () => {
     })).rejects.toMatchObject({ status: 501, code: 'MEDIA_NOT_CONFIGURED' });
     expect(fetchMock).not.toHaveBeenCalled();
   });
+
+  it('does not invent a department endpoint when the staff contract is unavailable', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    const api = new HttpCivicFixApi({ baseUrl: 'https://api.example.test', timeoutMs: 1000 });
+
+    await expect(api.listDepartmentComplaints({ departmentId: 'roads', departmentName: 'Roads and Public Works', membershipRole: 'member' }))
+      .rejects.toMatchObject({ status: 501, code: 'DEPARTMENT_API_NOT_CONFIGURED' });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
 });

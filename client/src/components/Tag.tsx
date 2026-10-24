@@ -1,4 +1,4 @@
-import { getStatusMeta, PRIORITY_META, type ComplaintStatus, type Priority } from '../lib/domain';
+import { getPriorityMeta, getStatusMeta, type ComplaintPriority, type ComplaintStatus, type Priority } from '../lib/domain';
 import { cx } from '../lib/cx';
 
 const toneClass = {
@@ -26,13 +26,15 @@ const priorityClass: Record<Priority, string> = {
   P4: 'bg-tag-gray-bg text-ink',
 };
 
-export function PriorityBadge({ priority }: { priority: Priority | null }) {
+export function PriorityBadge({ priority }: { priority: ComplaintPriority | null }) {
   if (!priority) {
     return <span className={cx(tagBase, 'border border-hairline text-ink-muted')}>Priority pending</span>;
   }
+  const meta = getPriorityMeta(priority);
+  const className = priority in priorityClass ? priorityClass[priority as keyof typeof priorityClass] : 'bg-tag-gray-bg text-ink';
   return (
-    <span className={cx(tagBase, 'font-semibold', priorityClass[priority])} title={PRIORITY_META[priority].description}>
-      {PRIORITY_META[priority].label}
+    <span className={cx(tagBase, 'font-semibold', className)} title={meta.description}>
+      {meta.label}
     </span>
   );
 }

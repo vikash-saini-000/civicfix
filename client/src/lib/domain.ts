@@ -19,6 +19,8 @@ export type KnownComplaintStatus = (typeof COMPLAINT_STATUSES)[number];
 export type ComplaintStatus = KnownComplaintStatus | (string & {});
 
 export type Priority = 'P1' | 'P2' | 'P3' | 'P4';
+/** Backend values may gain a new priority before this client is updated. */
+export type ComplaintPriority = Priority | (string & {});
 
 export const CATEGORIES = [
   { id: 'roads', label: 'Roads and potholes' },
@@ -169,6 +171,15 @@ export const PRIORITY_META: Record<Priority, { label: string; description: strin
   P3: { label: 'P3 Medium', description: 'Needs fixing soon.' },
   P4: { label: 'P4 Low', description: 'Minor problem.' },
 };
+
+const UNKNOWN_PRIORITY_META = {
+  label: 'Priority update',
+  description: 'The complaint has a priority value that is not described in this version of CivicFix.',
+};
+
+export function getPriorityMeta(priority: string): { label: string; description: string } {
+  return PRIORITY_META[priority as Priority] ?? UNKNOWN_PRIORITY_META;
+}
 
 export function formatDateTime(iso: string | null | undefined): string {
   const date = iso ? new Date(iso) : null;

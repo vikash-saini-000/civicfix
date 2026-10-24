@@ -214,4 +214,12 @@ describe('ComplaintDetailPage', () => {
     resolveFirst(makeComplaint({ publicId: 'CF-2026-00001', title: 'Stale first complaint' }));
     await waitFor(() => expect(screen.queryByRole('heading', { name: 'Stale first complaint' })).not.toBeInTheDocument());
   });
+
+  it('does not fabricate citizen resolution or dispute details', async () => {
+    renderDetail(makeApi({ getComplaint: vi.fn().mockResolvedValue(makeComplaint({ status: 'RESOLVED', history: [{ status: 'RESOLVED', at: '2026-10-24T10:00:00.000Z' }] })) }));
+
+    await waitFor(() => expect(screen.getByText('Public resolution and dispute details are unavailable')).toBeInTheDocument());
+    expect(screen.queryByRole('button', { name: /dispute/i })).not.toBeInTheDocument();
+    expect(screen.queryByText(/before and after/i)).not.toBeInTheDocument();
+  });
 });

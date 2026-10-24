@@ -27,7 +27,7 @@ export function complaintSearchText(complaint: Complaint): string {
     .toLocaleLowerCase();
 }
 
-export function sortComplaints(items: Complaint[], sort: ComplaintSort): Complaint[] {
+export function sortComplaints<T extends Complaint>(items: T[], sort: ComplaintSort): T[] {
   return [...items].sort((a, b) => {
     if (sort === 'title-asc') return a.title.localeCompare(b.title, undefined, { sensitivity: 'base' });
     const field = sort === 'created-desc' ? 'createdAt' : 'updatedAt';
