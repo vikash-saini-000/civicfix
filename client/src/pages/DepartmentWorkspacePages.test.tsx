@@ -77,6 +77,34 @@ describe('department workspace pages', () => {
     expect(screen.queryByText('citizen@example.test')).not.toBeInTheDocument();
   });
 
+  it('shows category and resolution insights from the complete authorized department response', async () => {
+    const api = makeDepartmentApi({
+      listDepartmentComplaints: vi.fn().mockResolvedValue([
+        makeComplaint({
+          publicId: 'CF-2026-00001',
+          status: 'RESOLVED',
+          selectedCategory: 'roads',
+          confirmedCategory: 'roads',
+          createdAt: '2026-10-20T00:00:00.000Z',
+          history: [{ status: 'RESOLVED', at: '2026-10-22T00:00:00.000Z' }],
+        }),
+        makeComplaint({
+          publicId: 'CF-2026-00002',
+          status: 'REPORTED',
+          selectedCategory: 'streetlight',
+          confirmedCategory: 'streetlight',
+        }),
+      ]),
+    });
+    renderPage(<DepartmentWorkspacePage departmentApi={api} />);
+
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'Operational insights' })).toBeInTheDocument());
+    expect(screen.getByRole('columnheader', { name: 'Category' })).toBeInTheDocument();
+    expect(screen.getByRole('rowheader', { name: 'Roads and potholes' })).toBeInTheDocument();
+    expect(screen.getByText('2.0 days')).toBeInTheDocument();
+    expect(screen.getByText(/across 1 complete record/)).toBeInTheDocument();
+  });
+
   it('filters the authorized department list by supported fields and resets filters', async () => {
     const api = makeDepartmentApi({
       listDepartmentComplaints: vi.fn().mockResolvedValue([

@@ -1,4 +1,4 @@
-import { Suspense, useEffect, useState, type ReactNode } from 'react';
+import { Suspense, useEffect, useRef, useState, type ReactNode } from 'react';
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router';
 import { API_MODE, AUTH_MODE, USING_MOCK_API } from '../api';
 import { ROLE_LABELS, navigationForRole, type NavigationItem } from '../auth/navigation';
@@ -29,13 +29,26 @@ export function Layout() {
   const [mobileOpen, setMobileOpen] = useState(false);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
   const [logoutError, setLogoutError] = useState<string | null>(null);
+  const menuButtonRef = useRef<HTMLButtonElement>(null);
+  const mobileNavigationRef = useRef<HTMLElement>(null);
+  const mainRef = useRef<HTMLElement>(null);
+  const previousPathRef = useRef(location.pathname);
   const user = state.status === 'authenticated' ? state.user : null;
   const isAuthenticated = user !== null;
   const navigation = user ? navigationForRole(user.role) : PUBLIC_NAVIGATION;
 
   useEffect(() => {
     setMobileOpen(false);
+    if (previousPathRef.current !== location.pathname) {
+      previousPathRef.current = location.pathname;
+      window.setTimeout(() => mainRef.current?.focus(), 0);
+    }
   }, [location.pathname]);
+
+  useEffect(() => {
+    if (!mobileOpen) return;
+    mobileNavigationRef.current?.querySelector<HTMLElement>('a, button')?.focus();
+  }, [mobileOpen]);
 
   async function handleLogout() {
     setIsLoggingOut(true);
@@ -87,6 +100,7 @@ export function Layout() {
               </div>
             )}
             <button
+              ref={menuButtonRef}
               type="button"
               className="min-h-12 min-w-12 border border-hairline bg-canvas px-3 text-[0.875rem] text-ink hover:bg-surface-1 md:hidden"
               aria-expanded={mobileOpen}
@@ -100,7 +114,19 @@ export function Layout() {
         </div>
 
         {mobileOpen && (
-          <nav id="mobile-navigation" aria-label="Mobile navigation" className="border-t border-hairline px-4 pb-3 md:hidden">
+          <nav
+            ref={mobileNavigationRef}
+            id="mobile-navigation"
+            aria-label="Mobile navigation"
+            className="border-t border-hairline px-4 pb-3 md:hidden"
+            onKeyDown={(event) => {
+              if (event.key === 'Escape') {
+                event.preventDefault();
+                setMobileOpen(false);
+                menuButtonRef.current?.focus();
+              }
+            }}
+          >
             {navigation.map((item) => <NavigationLink key={item.to} item={item} mobile />)}
             {isAuthenticated && user && (
               <div className="flex items-center justify-between gap-3 border-t border-hairline pt-3">
@@ -135,7 +161,7 @@ export function Layout() {
         </div>
       )}
 
-      <main id="main" className="flex-1">
+      <main id="main" ref={mainRef} tabIndex={-1} className="flex-1">
         <Suspense fallback={<RouteLoading />}>
           <Outlet />
         </Suspense>

@@ -1,7 +1,9 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router';
 import { api } from '../api';
+import { ApiError } from '../api/errors';
 import type { ComplaintApi } from '../api/types';
+import { useOptionalAuth } from '../auth/AuthContext';
 import { Button, ButtonLink } from '../components/Button';
 import { Card } from '../components/Card';
 import { EmptyState, ErrorState } from '../components/Feedback';
@@ -24,12 +26,16 @@ import {
   getStatusMeta,
   type Complaint,
 } from '../lib/domain';
+import { uniqueComplaints } from '../lib/analytics';
+import { useRefreshOnActivity } from '../lib/refresh';
 
 interface ComplaintsPageProps {
   complaintApi?: ComplaintApi;
 }
 
 export function ComplaintsPage({ complaintApi = api }: ComplaintsPageProps) {
+  const auth = useOptionalAuth();
+  const refreshSession = auth?.refreshSession;
   const [items, setItems] = useState<Complaint[] | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [reloadToken, setReloadToken] = useState(0);
@@ -37,6 +43,9 @@ export function ComplaintsPage({ complaintApi = api }: ComplaintsPageProps) {
   const [status, setStatus] = useState('');
   const [category, setCategory] = useState('');
   const [sort, setSort] = useState<ComplaintSort>('updated-desc');
+
+  const refresh = useCallback(() => setReloadToken((value) => value + 1), []);
+  useRefreshOnActivity(refresh);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -50,13 +59,18 @@ export function ComplaintsPage({ complaintApi = api }: ComplaintsPageProps) {
           setErrorMessage('The complaint service returned an unexpected response. Please try again.');
           return;
         }
-        setItems(list);
+        setItems(uniqueComplaints(list));
       })
       .catch((error: unknown) => {
-        if (!controller.signal.aborted) setErrorMessage(complaintLoadErrorMessage(error));
+        if (controller.signal.aborted) return;
+        if (error instanceof ApiError && error.status === 401) {
+          void refreshSession?.();
+          return;
+        }
+        setErrorMessage(complaintLoadErrorMessage(error));
       });
     return () => controller.abort();
-  }, [complaintApi, reloadToken]);
+  }, [complaintApi, refreshSession, reloadToken]);
 
   const filteredItems = useMemo(() => {
     if (!items) return [];

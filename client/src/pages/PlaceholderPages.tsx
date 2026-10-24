@@ -164,7 +164,7 @@ export function RolePlaceholderPage({ role }: { role: string }) {
       <Card className="max-w-2xl">
         <EmptyState
           title="Workspace foundation ready"
-          description={`The ${ROLE_LABELS[roleToKey(role)] ?? role} navigation is available, but operational workflows are intentionally not implemented in Phase 2.`}
+          description={`The ${ROLE_LABELS[roleToKey(role)] ?? role} navigation is available, but this operational workflow is not implemented in the current backend contract.`}
           action={<ButtonLink to="/">Return to the public home page</ButtonLink>}
         />
       </Card>

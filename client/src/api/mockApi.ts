@@ -1,6 +1,6 @@
 import type { Complaint, ComplaintStatus, Priority } from '../lib/domain';
 import type { DepartmentContext } from '../auth/department';
-import type { ComplaintApi, DepartmentApi, StaffComplaint } from './types';
+import type { ComplaintApi, DepartmentApi, PlatformAnalyticsApi, PlatformComplaint, StaffComplaint } from './types';
 import { ApiError } from './errors';
 
 const STORAGE_KEY = 'civicfix.mock.complaints.v1';
@@ -22,7 +22,7 @@ interface StoredComplaint extends Complaint {
   priority: Priority | null;
 }
 
-export function createMockApi(options: MockApiOptions = {}): ComplaintApi & DepartmentApi {
+export function createMockApi(options: MockApiOptions = {}): ComplaintApi & DepartmentApi & PlatformAnalyticsApi {
   const now = options.now ?? (() => new Date());
   const storage = options.storage ?? getBrowserStorage();
   const latencyMs = options.latencyMs ?? 250;
@@ -113,6 +113,10 @@ export function createMockApi(options: MockApiOptions = {}): ComplaintApi & Depa
         (item) => item.publicId === publicId.toUpperCase() && item.department?.trim() === departmentName,
       );
       return complaint ? toStaffComplaint(complaint) : null;
+    },
+    async listPlatformComplaints(signal) {
+      await delay(latencyMs, signal);
+      return complaints.map(toPlatformComplaint).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
     },
   };
 }
@@ -246,6 +250,14 @@ function toStaffComplaint(complaint: StoredComplaint): StaffComplaint | null {
   return {
     ...toCitizenComplaint(complaint),
     departmentName: complaint.department.trim(),
+    priority: complaint.priority ?? null,
+  };
+}
+
+function toPlatformComplaint(complaint: StoredComplaint): PlatformComplaint {
+  return {
+    ...toCitizenComplaint(complaint),
+    departmentName: complaint.department?.trim() || null,
     priority: complaint.priority ?? null,
   };
 }

@@ -1,13 +1,19 @@
 import { render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import { describe, expect, it } from 'vitest';
+import type { AuthApi } from '../api/authTypes';
 import { AuthProvider } from '../auth/AuthContext';
 import { AppRoutes } from './router';
 
 function renderRoutes(initialEntries: string[]) {
+  const authApi: AuthApi = {
+    getCurrentUser: async () => null,
+    login: async () => { throw new Error('not used'); },
+    logout: async () => undefined,
+  };
   return render(
     <MemoryRouter initialEntries={initialEntries}>
-      <AuthProvider>
+      <AuthProvider authApi={authApi}>
         <AppRoutes />
       </AuthProvider>
     </MemoryRouter>,

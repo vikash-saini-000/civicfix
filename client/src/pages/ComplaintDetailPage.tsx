@@ -4,6 +4,7 @@ import { CircleMarker, MapContainer, TileLayer } from 'react-leaflet';
 import { api } from '../api';
 import { ApiError } from '../api/errors';
 import type { ComplaintApi } from '../api/types';
+import { useOptionalAuth } from '../auth/AuthContext';
 import { ButtonLink } from '../components/Button';
 import { ErrorState, LoadingIndicator } from '../components/Feedback';
 import { Page } from '../components/Layout';
@@ -22,6 +23,8 @@ interface ComplaintDetailPageProps {
 }
 
 export function ComplaintDetailPage({ complaintApi = api }: ComplaintDetailPageProps) {
+  const auth = useOptionalAuth();
+  const refreshSession = auth?.refreshSession;
   const params = useParams<{ complaintId?: string; publicId?: string }>();
   const complaintId = params.complaintId ?? params.publicId ?? '';
   const justSubmitted = (useLocation().state as { justSubmitted?: boolean } | null)?.justSubmitted;
@@ -37,11 +40,14 @@ export function ComplaintDetailPage({ complaintApi = api }: ComplaintDetailPageP
 
     let alive = true;
     let requestInFlight = false;
+    let lastRefreshAt = 0;
     let requestController: AbortController | null = null;
     setState(null);
 
     async function load() {
-      if (!alive || requestInFlight) return;
+      const now = Date.now();
+      if (!alive || requestInFlight || now - lastRefreshAt < 1000) return;
+      lastRefreshAt = now;
       requestInFlight = true;
       const request = new AbortController();
       requestController = request;
@@ -50,6 +56,10 @@ export function ComplaintDetailPage({ complaintApi = api }: ComplaintDetailPageP
         if (alive) setState(complaint ? { id: complaintId, complaint, error: null } : { id: complaintId, complaint: null, error: 'not-found' });
       } catch (error: unknown) {
         if (!alive || request.signal.aborted) return;
+        if (error instanceof ApiError && error.status === 401) {
+          void refreshSession?.();
+          return;
+        }
         setState({ id: complaintId, complaint: null, error: classifyDetailError(error) });
       } finally {
         requestInFlight = false;
@@ -58,14 +68,21 @@ export function ComplaintDetailPage({ complaintApi = api }: ComplaintDetailPageP
     }
 
     void load();
-    const timer = window.setInterval(() => void load(), 15_000);
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === 'visible') void load();
+    };
+    const timer = window.setInterval(() => refreshWhenVisible(), 30_000);
+    window.addEventListener('focus', refreshWhenVisible);
+    document.addEventListener('visibilitychange', refreshWhenVisible);
     return () => {
       alive = false;
       window.clearInterval(timer);
+      window.removeEventListener('focus', refreshWhenVisible);
+      document.removeEventListener('visibilitychange', refreshWhenVisible);
       requestController?.abort();
       controller.abort();
     };
-  }, [complaintApi, complaintId, reloadToken]);
+  }, [complaintApi, complaintId, refreshSession, reloadToken]);
 
   if (!state || state.id !== complaintId) {
     return (
@@ -113,7 +130,7 @@ export function ComplaintDetailPage({ complaintApi = api }: ComplaintDetailPageP
 
         <section aria-labelledby="details-heading" className="flex flex-col gap-6">
           <h2 id="details-heading" className="text-[1.25rem]">Complaint details</h2>
-          <dl className="grid grid-cols-[8rem_1fr] gap-x-4 gap-y-3 text-[0.875rem]">
+          <dl className="grid gap-x-4 gap-y-3 text-[0.875rem] sm:grid-cols-[8rem_1fr]">
             <dt className="text-ink-muted">Category</dt>
             <dd>{categoryLabel(complaint.confirmedCategory ?? complaint.selectedCategory)}</dd>
             <dt className="text-ink-muted">Reported</dt>

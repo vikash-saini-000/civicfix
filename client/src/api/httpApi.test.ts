@@ -167,4 +167,13 @@ describe('HttpCivicFixApi', () => {
       .rejects.toMatchObject({ status: 501, code: 'DEPARTMENT_API_NOT_CONFIGURED' });
     expect(fetchMock).not.toHaveBeenCalled();
   });
+
+  it('does not invent a platform analytics endpoint when the contract is unavailable', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    const api = new HttpCivicFixApi({ baseUrl: 'https://api.example.test', timeoutMs: 1000 });
+
+    await expect(api.listPlatformComplaints()).rejects.toMatchObject({ status: 501, code: 'PLATFORM_ANALYTICS_NOT_CONFIGURED' });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
 });

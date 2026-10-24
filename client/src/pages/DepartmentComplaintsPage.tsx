@@ -1,7 +1,9 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router';
 import { api } from '../api';
+import { ApiError } from '../api/errors';
 import type { DepartmentApi, StaffComplaint } from '../api/types';
+import { useOptionalAuth } from '../auth/AuthContext';
 import { useDepartmentContext } from '../auth/useDepartmentContext';
 import { Button, ButtonLink } from '../components/Button';
 import { Card } from '../components/Card';
@@ -14,12 +16,16 @@ import { PriorityBadge, StatusTag } from '../components/Tag';
 import { complaintCategoryOptions, complaintStatusOptions, sortComplaints, staffComplaintSearchText, staffLoadErrorMessage, priorityOptions, type ComplaintSort } from '../lib/department';
 import { complaintLocationLabel } from '../lib/complaints';
 import { categoryLabel, formatDateTime, getPriorityMeta, getStatusMeta } from '../lib/domain';
+import { uniqueComplaints } from '../lib/analytics';
+import { useRefreshOnActivity } from '../lib/refresh';
 
 interface DepartmentComplaintsPageProps {
   departmentApi?: DepartmentApi;
 }
 
 export function DepartmentComplaintsPage({ departmentApi = api }: DepartmentComplaintsPageProps) {
+  const auth = useOptionalAuth();
+  const refreshSession = auth?.refreshSession;
   const { context, memberships, selectDepartment, hasInvalidRequestedContext } = useDepartmentContext();
   const [items, setItems] = useState<StaffComplaint[] | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -29,6 +35,9 @@ export function DepartmentComplaintsPage({ departmentApi = api }: DepartmentComp
   const [category, setCategory] = useState('');
   const [priority, setPriority] = useState('');
   const [sort, setSort] = useState<ComplaintSort>('updated-desc');
+
+  const refresh = useCallback(() => setReloadToken((value) => value + 1), []);
+  useRefreshOnActivity(refresh, { enabled: Boolean(context) });
 
   useEffect(() => {
     if (!context) {
@@ -44,14 +53,19 @@ export function DepartmentComplaintsPage({ departmentApi = api }: DepartmentComp
       .listDepartmentComplaints(context, controller.signal)
       .then((list) => {
         if (controller.signal.aborted) return;
-        if (Array.isArray(list)) setItems(list);
+        if (Array.isArray(list)) setItems(uniqueComplaints(list));
         else setErrorMessage('The department complaint service returned an unexpected response. Please try again.');
       })
       .catch((error: unknown) => {
-        if (!controller.signal.aborted) setErrorMessage(staffLoadErrorMessage(error));
+        if (controller.signal.aborted) return;
+        if (error instanceof ApiError && error.status === 401) {
+          void refreshSession?.();
+          return;
+        }
+        setErrorMessage(staffLoadErrorMessage(error));
       });
     return () => controller.abort();
-  }, [context, departmentApi, hasInvalidRequestedContext, reloadToken]);
+  }, [context, departmentApi, hasInvalidRequestedContext, refreshSession, reloadToken]);
 
   const filteredItems = useMemo(() => {
     if (!items) return [];

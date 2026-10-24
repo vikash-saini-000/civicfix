@@ -3,7 +3,7 @@ import type { DepartmentContext } from '../auth/department';
 import type { AuthSession, AuthUser, LoginCredentials } from './authTypes';
 import { parseComplaint, parseComplaintList } from './complaintContract';
 import { ApiError } from './errors';
-import type { CivicFixApi, StaffComplaint } from './types';
+import type { CivicFixApi, PlatformComplaint, StaffComplaint } from './types';
 
 export interface HttpApiOptions {
   baseUrl: string;
@@ -67,6 +67,10 @@ export class HttpCivicFixApi implements CivicFixApi {
     return Promise.reject(departmentContractUnavailable());
   }
 
+  listPlatformComplaints(_signal?: AbortSignal): Promise<PlatformComplaint[]> {
+    return Promise.reject(platformAnalyticsUnavailable());
+  }
+
   private async request<T>(
     path: string,
     options: { method?: string; body?: BodyInit | object; signal?: AbortSignal } = {},
@@ -117,6 +121,10 @@ export class HttpCivicFixApi implements CivicFixApi {
 
 function departmentContractUnavailable(): ApiError {
   return new ApiError('Department complaint access is not configured for the backend contract yet.', 501, 'DEPARTMENT_API_NOT_CONFIGURED');
+}
+
+function platformAnalyticsUnavailable(): ApiError {
+  return new ApiError('Platform analytics are not configured for the backend contract yet.', 501, 'PLATFORM_ANALYTICS_NOT_CONFIGURED');
 }
 
 async function readResponse(response: Response): Promise<unknown> {

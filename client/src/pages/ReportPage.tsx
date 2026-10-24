@@ -124,7 +124,7 @@ export function ReportPage({ complaintApi = api }: ReportPageProps) {
       title="Report a Civic Issue"
       intro="Tell us what is wrong and where. Clear details and a precise location help the right civic team act."
     >
-      <form onSubmit={onSubmit} noValidate className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_20rem]">
+      <form onSubmit={onSubmit} noValidate aria-busy={submitting} className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_20rem]">
         <div className="flex max-w-[44rem] flex-col gap-6">
           {errorMessages.length > 0 && step === 'details' && (
             <div ref={summaryRef} tabIndex={-1}>
@@ -145,6 +145,7 @@ export function ReportPage({ complaintApi = api }: ReportPageProps) {
                   <legend className="mb-1 text-[1.25rem]">1. Issue details</legend>
                   <TextInput
                     label="What is the problem?"
+                    required
                     helper={`Short summary · ${title.length} / ${TITLE_MAX}`}
                     placeholder="For example: Deep pothole near the bus stop"
                     value={title}
@@ -158,6 +159,7 @@ export function ReportPage({ complaintApi = api }: ReportPageProps) {
                   />
                   <TextArea
                     label="Describe the issue"
+                    required
                     helper={`${description.length} / ${DESC_MAX}`}
                     placeholder="What did you see? How long has it been like this? Is anyone at risk?"
                     value={description}
@@ -198,6 +200,7 @@ export function ReportPage({ complaintApi = api }: ReportPageProps) {
                   </p>
                   <LocationPicker
                     value={location}
+                    required
                     onChange={(point) => {
                       setLocation(point);
                       updateFieldError('location');
@@ -242,7 +245,7 @@ export function ReportPage({ complaintApi = api }: ReportPageProps) {
                   <h2 className="mt-1 text-[1.5rem]">Check your report before sending</h2>
                   <p className="mt-2 text-ink-muted">We will send only the details shown here. You can go back and edit them.</p>
                 </div>
-                <dl className="grid grid-cols-[9rem_1fr] gap-x-4 gap-y-3 text-[0.875rem]">
+                <dl className="grid gap-x-4 gap-y-3 text-[0.875rem] sm:grid-cols-[9rem_1fr]">
                   <dt className="text-ink-muted">Title</dt><dd>{title.trim()}</dd>
                   <dt className="text-ink-muted">Description</dt><dd className="whitespace-pre-line">{description.trim()}</dd>
                   <dt className="text-ink-muted">Category</dt><dd>{category ? CATEGORIES.find((item) => item.id === category)?.label : 'Not chosen'}</dd>

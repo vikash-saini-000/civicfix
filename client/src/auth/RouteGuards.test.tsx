@@ -79,9 +79,13 @@ describe('protected route behavior', () => {
   });
 
   it('redirects an already authenticated user away from login to the role default', async () => {
-    renderAt('/login', makeAuthApi(makeUser('department_manager')));
+    renderAt('/login', makeAuthApi({
+      ...makeUser('department_manager'),
+      departmentMemberships: [{ departmentId: 'roads', departmentName: 'Roads and Public Works', role: 'manager' }],
+    }));
 
-    await waitFor(() => expect(screen.getByRole('heading', { name: 'Department manager workspace' })).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole('heading', { name: /workspace$/i })).toBeInTheDocument());
+    expect(screen.getByRole('heading', { name: 'Roads and Public Works workspace' })).toBeInTheDocument();
   });
 
   it('shows a forbidden state when a citizen opens a manager route', async () => {
@@ -157,6 +161,25 @@ describe('protected route behavior', () => {
 
     await waitFor(() => expect(screen.getByRole('heading', { name: 'Manager review' })).toBeInTheDocument());
     expect(screen.getByText('Manager review queue is not available yet')).toBeInTheDocument();
+  });
+
+  it('allows only a platform administrator to open the protected platform overview', async () => {
+    renderAt('/admin', makeAuthApi(makeUser('platform_admin')));
+
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'Summary metrics' })).toBeInTheDocument());
+    expect(screen.getByRole('heading', { name: 'Summary metrics' })).toBeInTheDocument();
+    expect(screen.getByLabelText('Total reports: 3')).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Department workspace' })).not.toBeInTheDocument();
+  });
+
+  it('denies a department manager access to the platform overview', async () => {
+    renderAt('/admin', makeAuthApi({
+      ...makeUser('department_manager'),
+      departmentMemberships: [{ departmentId: 'roads', departmentName: 'Roads and Public Works', role: 'manager' }],
+    }));
+
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'Access not available' })).toBeInTheDocument());
+    expect(screen.queryByRole('heading', { name: 'Platform overview' })).not.toBeInTheDocument();
   });
 
   it('denies a department member access to manager review actions', async () => {

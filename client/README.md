@@ -156,6 +156,19 @@ IDs are rejected. The current repository has no backend department complaint end
 `DEPARTMENT_API_NOT_CONFIGURED` instead of inventing a production route. The development mock adapter exposes the existing
 seed records through a department-scoped, read-only adapter.
 
+## Platform analytics and accessibility
+
+The protected `/admin` route now loads the complete local mock dataset through a mock-only platform analytics capability.
+It provides clearly labelled summary metrics, date-range filtering, category and department tables, report-volume trends,
+and client-derived resolution timing for interface validation. The HTTP adapter intentionally returns
+`PLATFORM_ANALYTICS_NOT_CONFIGURED` because this repository has no authorized platform-wide analytics endpoint, complete
+dataset contract, or historical aggregation API. The frontend does not claim that mock values are production statistics.
+
+The shared shell and high-risk workflows include keyboard route focus management, mobile menu Escape/focus restoration,
+native required-field semantics, associated validation errors, a keyboard-friendly coordinate alternative to the map,
+responsive status/detail layouts, and accessible table alternatives for analytics. Automated coverage remains limited to
+the installed Vitest and Testing Library setup; no axe package or browser viewport test runner is installed.
+
 ## Phase 6 and Phase 7 workflow contracts
 
 The blueprint lists proposed AI-analysis, manager-review, work-order evidence, verification, and dispute endpoints, but this
@@ -179,6 +192,22 @@ Citizen and department complaint lists use the complete authorized arrays return
 category, priority, and sorting are local-only operations because the current API exposes no pagination or query-parameter
 contract. Search inputs include accessible labels and clear controls. No unsupported server parameters or result totals are sent
 or claimed.
+
+## Phase 16 synchronization fallback
+
+The repository has no WebSocket, SSE, notification-list, unread-count, read-state, or activity-feed contract. The frontend
+does not invent those endpoints or fabricate notification data. Supported complaint pages now refresh their authorized list
+or detail data when the browser window regains focus or the tab becomes visible. Complaint details also perform a conservative
+30-second refresh while visible; the timer is stopped on unmount and refresh requests are not allowed to overlap. This is a
+refresh-on-focus/polling fallback, not instantaneous push delivery.
+
+## Deployment handoff
+
+The app is a Vite React TypeScript client. From `client/`, the production check/build command is `npm run build`; Vite emits
+the static bundle to `client/dist`. Set `VITE_CIVICFIX_API_MODE=http` and `VITE_CIVICFIX_AUTH_MODE=http` for a real backend,
+and set `VITE_CIVICFIX_API_BASE_URL` only when the API is not same-origin. These `VITE_` values are public browser configuration,
+not secrets. The current HTTP adapter still requires the backend's actual session, CSRF, role, complaint, media, analytics, and
+notification contracts before those workflows can be considered production-integrated.
 
 ## Design
 

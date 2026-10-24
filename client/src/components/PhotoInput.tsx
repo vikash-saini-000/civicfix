@@ -49,6 +49,7 @@ export function PhotoInput({ files, onChange, onError, error, disabled = false, 
   }
 
   const messageId = `${id}-msg`;
+  const helpId = `${id}-help`;
   const effectiveError = error ?? localError;
 
   return (
@@ -56,7 +57,7 @@ export function PhotoInput({ files, onChange, onError, error, disabled = false, 
       <span id={`${id}-label`} className="text-[0.75rem] tracking-[0.02em] text-ink-muted">
         Photos <span className="text-ink-subtle">(optional, up to {MAX_PHOTOS})</span>
       </span>
-      <p className="text-[0.75rem] text-ink-muted">
+       <p id={helpId} className="text-[0.75rem] text-ink-muted">
         Images only, up to 10 MB each. Do not include private documents or unnecessary personal information.
       </p>
       {disabledReason && <p className="text-[0.75rem] text-ink-muted">{disabledReason}</p>}
@@ -96,7 +97,8 @@ export function PhotoInput({ files, onChange, onError, error, disabled = false, 
             className="sr-only"
             onChange={(event) => add(event.target.files)}
             aria-labelledby={`${id}-label`}
-            aria-describedby={effectiveError ? messageId : undefined}
+            aria-describedby={effectiveError ? `${helpId} ${messageId}` : helpId}
+            aria-invalid={Boolean(effectiveError)}
           />
           <Button variant="tertiary" size="sm" onClick={() => inputRef.current?.click()} disabled={disabled}>
             {files.length ? 'Add another photo' : 'Add photos'}
@@ -104,7 +106,7 @@ export function PhotoInput({ files, onChange, onError, error, disabled = false, 
         </div>
       )}
       {effectiveError && (
-        <p id={messageId} className="text-[0.75rem] text-error" role="alert">
+          <p id={messageId} className="text-[0.75rem] text-error" role="alert">
           {effectiveError}
         </p>
       )}

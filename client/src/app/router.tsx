@@ -8,6 +8,9 @@ import { HomePage } from '../pages/HomePage';
 const ComplaintDetailPage = lazy(() =>
   import('../pages/ComplaintDetailPage').then(({ ComplaintDetailPage: Component }) => ({ default: Component })),
 );
+const AdminDashboardPage = lazy(() =>
+  import('../pages/AdminDashboardPage').then(({ AdminDashboardPage: Component }) => ({ default: Component })),
+);
 const ComplaintsPage = lazy(() => import('../pages/ComplaintsPage').then(({ ComplaintsPage: Component }) => ({ default: Component })));
 const DashboardPage = lazy(() => import('../pages/DashboardPage').then(({ DashboardPage: Component }) => ({ default: Component })));
 const DepartmentComplaintDetailPage = lazy(() =>
@@ -73,6 +76,7 @@ export function AppRoutes() {
         <Route path="manager/review/:complaintId" element={<Guarded roles={['department_manager']}><ManagerReviewDetailPage /></Guarded>} />
         <Route path="manager/review" element={<Guarded roles={['department_manager']}><ManagerReviewPage /></Guarded>} />
         <Route path="manager/*" element={<Guarded roles={['department_manager']}><RolePlaceholderPage role="Department manager" /></Guarded>} />
+        <Route path="admin" element={<Guarded roles={['platform_admin']}><AdminDashboardPage /></Guarded>} />
         <Route path="admin/*" element={<Guarded roles={['platform_admin']}><RolePlaceholderPage role="Platform administrator" /></Guarded>} />
         <Route path="*" element={<NotFound />} />
       </Route>

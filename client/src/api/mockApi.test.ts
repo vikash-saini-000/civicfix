@@ -56,4 +56,14 @@ describe('mock CivicFix API', () => {
     await expect(api.listDepartmentComplaints({ departmentId: 'other', departmentName: 'Other department', membershipRole: 'member' })).resolves.toEqual([]);
     await expect(api.listDepartmentComplaints({ departmentId: 'roads', membershipRole: 'member' })).rejects.toMatchObject({ status: 403 });
   });
+
+  it('exposes the complete demo dataset through the protected platform capability', async () => {
+    const api = createMockApi({ storage: new MemoryStorage(), latencyMs: 0 });
+
+    await expect(api.listPlatformComplaints()).resolves.toEqual(expect.arrayContaining([
+      expect.objectContaining({ publicId: 'CF-2026-00141', departmentName: 'Roads and Public Works', priority: 'P2' }),
+      expect.objectContaining({ publicId: 'CF-2026-00118', departmentName: 'Electrical Maintenance' }),
+      expect.objectContaining({ publicId: 'CF-2026-00097', departmentName: 'Solid Waste Management' }),
+    ]));
+  });
 });

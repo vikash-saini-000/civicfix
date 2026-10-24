@@ -138,7 +138,7 @@ export function DepartmentComplaintDetailPage({ departmentApi = api }: Departmen
         </section>
         <section aria-labelledby="staff-details-heading" className="flex flex-col gap-6">
           <h2 id="staff-details-heading" className="text-[1.25rem]">Complaint details</h2>
-          <dl className="grid grid-cols-[8rem_1fr] gap-x-4 gap-y-3 text-[0.875rem]">
+          <dl className="grid gap-x-4 gap-y-3 text-[0.875rem] sm:grid-cols-[8rem_1fr]">
             <dt className="text-ink-muted">Category</dt>
             <dd>{categoryLabel(complaint.confirmedCategory ?? complaint.selectedCategory)}</dd>
             <dt className="text-ink-muted">Priority</dt>

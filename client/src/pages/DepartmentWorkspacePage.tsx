@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router';
 import { api } from '../api';
+import { ApiError } from '../api/errors';
 import type { DepartmentApi, StaffComplaint } from '../api/types';
-import { useAuth } from '../auth/AuthContext';
+import { useAuth, useOptionalAuth } from '../auth/AuthContext';
 import { useDepartmentContext } from '../auth/useDepartmentContext';
 import { DepartmentContextBar } from '../components/DepartmentContextBar';
 import { ButtonLink } from '../components/Button';
@@ -13,6 +14,8 @@ import { StatusTag } from '../components/Tag';
 import { complaintLocationLabel, sortComplaints } from '../lib/complaints';
 import { categoryLabel, formatDateTime, getStatusMeta } from '../lib/domain';
 import { staffLoadErrorMessage } from '../lib/department';
+import { buildComplaintAnalytics, uniqueComplaints } from '../lib/analytics';
+import { useRefreshOnActivity } from '../lib/refresh';
 
 interface DepartmentWorkspacePageProps {
   departmentApi?: DepartmentApi;
@@ -20,10 +23,15 @@ interface DepartmentWorkspacePageProps {
 
 export function DepartmentWorkspacePage({ departmentApi = api }: DepartmentWorkspacePageProps) {
   const { state } = useAuth();
+  const auth = useOptionalAuth();
+  const refreshSession = auth?.refreshSession;
   const { context, memberships, selectDepartment, hasInvalidRequestedContext } = useDepartmentContext();
   const [items, setItems] = useState<StaffComplaint[] | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [reloadToken, setReloadToken] = useState(0);
+
+  const refresh = useCallback(() => setReloadToken((value) => value + 1), []);
+  useRefreshOnActivity(refresh, { enabled: Boolean(context) });
 
   useEffect(() => {
     if (!context) {
@@ -43,12 +51,19 @@ export function DepartmentWorkspacePage({ departmentApi = api }: DepartmentWorks
         else setErrorMessage('The department complaint service returned an unexpected response. Please try again.');
       })
       .catch((error: unknown) => {
-        if (!controller.signal.aborted) setErrorMessage(staffLoadErrorMessage(error));
+        if (controller.signal.aborted) return;
+        if (error instanceof ApiError && error.status === 401) {
+          void refreshSession?.();
+          return;
+        }
+        setErrorMessage(staffLoadErrorMessage(error));
       });
     return () => controller.abort();
-  }, [context, departmentApi, hasInvalidRequestedContext, reloadToken]);
+  }, [context, departmentApi, hasInvalidRequestedContext, refreshSession, reloadToken]);
 
-  const recent = useMemo(() => (items ? sortComplaints(items, 'updated-desc').slice(0, 5) : []), [items]);
+  const uniqueStaffComplaints = useMemo(() => uniqueComplaints(items ?? []), [items]);
+  const analytics = useMemo(() => buildComplaintAnalytics(uniqueStaffComplaints), [uniqueStaffComplaints]);
+  const recent = useMemo(() => sortComplaints(uniqueStaffComplaints, 'updated-desc').slice(0, 5), [uniqueStaffComplaints]);
   const heading = context?.departmentName ?? context?.departmentId ?? 'Department workspace';
 
   if (!context) {
@@ -88,8 +103,8 @@ export function DepartmentWorkspacePage({ departmentApi = api }: DepartmentWorks
     );
   }
 
-  const complaints = items ?? [];
-  const statusOptions = [...new Set(complaints.map((complaint) => complaint.status))];
+  const complaints = analytics.items;
+  const statusOptions = Object.keys(analytics.statusCounts);
   return (
     <Page
       title={`${heading} workspace`}
@@ -101,14 +116,72 @@ export function DepartmentWorkspacePage({ departmentApi = api }: DepartmentWorks
         <section aria-labelledby="department-summary-heading">
           <div className="mb-4">
             <h2 id="department-summary-heading" className="text-[1.25rem]">Department workload</h2>
-            <p className="mt-1 text-[0.875rem] text-ink-muted">Counts reflect the complete complaint list returned for this department context.</p>
+            <p className="mt-1 text-[0.875rem] text-ink-muted">Counts reflect the complete complaint list returned for this department context. Duplicate IDs are counted once.</p>
           </div>
           <div className="grid gap-px border border-hairline bg-hairline sm:grid-cols-2 lg:grid-cols-3">
-            <MetricCard label="Visible complaints" value={complaints.length} />
+            <MetricCard label="Visible complaints" value={analytics.total} />
             {statusOptions.map((status) => (
-              <MetricCard key={status} label={getStatusMeta(status).label} value={complaints.filter((complaint) => complaint.status === status).length} />
+              <MetricCard key={status} label={getStatusMeta(status).label} value={analytics.statusCounts[status] ?? 0} />
             ))}
           </div>
+        </section>
+
+        <section aria-labelledby="department-insights-heading">
+          <div className="mb-4">
+            <h2 id="department-insights-heading" className="text-[1.25rem]">Operational insights</h2>
+            <p className="mt-1 text-[0.875rem] text-ink-muted">
+              Client-derived from this complete authorized department response. These are not platform-wide totals or official SLA measures.
+            </p>
+          </div>
+          <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+            <Card>
+              <h3 className="text-[1.125rem]">Reports by category</h3>
+              {analytics.categoryCounts.length === 0 ? (
+                <p className="mt-3 text-[0.875rem] text-ink-muted">No category values were returned.</p>
+              ) : (
+                <div className="mt-4 overflow-x-auto">
+                  <table className="w-full min-w-[18rem] text-left text-[0.875rem]">
+                    <caption className="sr-only">Department complaint counts by category</caption>
+                    <thead>
+                      <tr className="border-b border-hairline text-ink-muted">
+                        <th scope="col" className="px-2 py-2 font-normal">Category</th>
+                        <th scope="col" className="px-2 py-2 text-right font-normal">Reports</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {analytics.categoryCounts.map((category) => (
+                        <tr key={category.id} className="border-b border-hairline">
+                          <th scope="row" className="px-2 py-3 font-normal">{category.label}</th>
+                          <td className="px-2 py-3 text-right font-semibold">{category.count}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </Card>
+            <Card>
+              <h3 className="text-[1.125rem]">Resolution duration</h3>
+              {analytics.resolutionDuration.averageHours === null ? (
+                <p className="mt-3 text-[0.875rem] text-ink-muted">
+                  Unavailable: no complaint had both a valid submission timestamp and a valid resolved or closed history event.
+                </p>
+              ) : (
+                <>
+                  <p className="mt-3 text-[2rem] font-semibold" aria-label={`Average resolution duration: ${formatHours(analytics.resolutionDuration.averageHours)}`}>
+                    {formatHours(analytics.resolutionDuration.averageHours)}
+                  </p>
+                  <p className="mt-2 text-[0.875rem] text-ink-muted">
+                    Average time from report submission to the first resolved or closed event, across {analytics.resolutionDuration.sampleSize} complete record{analytics.resolutionDuration.sampleSize === 1 ? '' : 's'}.
+                  </p>
+                </>
+              )}
+            </Card>
+          </div>
+          <p className="mt-4 text-[0.75rem] text-ink-muted">
+            Active or pending records: {analytics.activeOrPendingCount}. Resolved or closed records: {analytics.resolvedOrClosedCount}.
+            Status labels follow the current complaint contract; unknown future statuses remain visible as returned.
+          </p>
         </section>
 
         {complaints.length === 0 ? (
@@ -168,4 +241,9 @@ function RecentStaffComplaint({ complaint }: { complaint: StaffComplaint }) {
       </Link>
     </li>
   );
+}
+
+function formatHours(hours: number): string {
+  if (hours < 24) return `${hours.toFixed(1)} hours`;
+  return `${(hours / 24).toFixed(1)} days`;
 }

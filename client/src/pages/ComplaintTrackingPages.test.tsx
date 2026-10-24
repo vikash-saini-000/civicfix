@@ -3,8 +3,10 @@ import { MemoryRouter, Route, Routes, useNavigate } from 'react-router';
 import type { ReactNode } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { ApiError } from '../api/errors';
+import type { AuthApi, AuthUser } from '../api/authTypes';
 import type { ComplaintApi } from '../api/types';
 import type { Complaint } from '../lib/domain';
+import { AuthProvider } from '../auth/AuthContext';
 import { ComplaintDetailPage } from './ComplaintDetailPage';
 import { ComplaintsPage } from './ComplaintsPage';
 import { DashboardPage } from './DashboardPage';
@@ -57,6 +59,27 @@ function renderDetail(complaintApi: ComplaintApi, id = 'CF-2026-00141') {
 }
 
 describe('DashboardPage', () => {
+  it('refreshes the session instead of presenting a 401 as a generic data error', async () => {
+    const user: AuthUser = { id: 'citizen-1', email: 'citizen@example.test', displayName: 'Test Citizen', role: 'citizen' };
+    const authApi: AuthApi = {
+      getCurrentUser: vi.fn().mockResolvedValue(user),
+      login: vi.fn(),
+      logout: vi.fn().mockResolvedValue(undefined),
+    };
+    const listMyComplaints = vi.fn().mockRejectedValue(new ApiError('expired', 401, 'SESSION_EXPIRED'));
+
+    render(
+      <MemoryRouter>
+        <AuthProvider authApi={authApi}>
+          <DashboardPage complaintApi={makeApi({ listMyComplaints })} />
+        </AuthProvider>
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(authApi.getCurrentUser).toHaveBeenCalledTimes(2));
+    expect(screen.queryByText('We could not load your dashboard')).not.toBeInTheDocument();
+  });
+
   it('derives supported status counts from the authorized complaint list', async () => {
     const complaintApi = makeApi({
       listMyComplaints: vi.fn().mockResolvedValue([
@@ -73,6 +96,15 @@ describe('DashboardPage', () => {
     expect(screen.getByLabelText('Under review: 1')).toBeInTheDocument();
     expect(screen.getByLabelText('Closed: 1')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Report an issue' })).toHaveAttribute('href', '/citizen/complaints/new');
+  });
+
+  it('refreshes the citizen list when the browser window becomes active', async () => {
+    const listMyComplaints = vi.fn().mockResolvedValue([makeComplaint()]);
+    render(<MemoryRouter><DashboardPage complaintApi={makeApi({ listMyComplaints })} /></MemoryRouter>);
+
+    await waitFor(() => expect(screen.getByText('Recent complaints')).toBeInTheDocument());
+    fireEvent(window, new Event('focus'));
+    await waitFor(() => expect(listMyComplaints).toHaveBeenCalledTimes(2));
   });
 
   it('shows a successful empty state and not a fabricated summary', async () => {
@@ -133,6 +165,26 @@ describe('ComplaintsPage', () => {
 });
 
 describe('ComplaintDetailPage', () => {
+  it('refreshes public status when the page regains focus and removes the listener on unmount', async () => {
+    let clock = 1_000;
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => clock);
+    const getComplaint = vi.fn().mockResolvedValue(makeComplaint());
+    const view = renderDetail(makeApi({ getComplaint }));
+
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'Deep pothole near the bus stop' })).toBeInTheDocument());
+    expect(getComplaint).toHaveBeenCalledTimes(1);
+
+    clock += 1_001;
+    fireEvent(window, new Event('focus'));
+    await waitFor(() => expect(getComplaint).toHaveBeenCalledTimes(2));
+
+    view.unmount();
+    clock += 1_001;
+    fireEvent(window, new Event('focus'));
+    expect(getComplaint).toHaveBeenCalledTimes(2);
+    nowSpy.mockRestore();
+  });
+
   it('renders the returned complaint and only the public tracking fields', async () => {
     renderDetail(makeApi());
 
@@ -141,6 +193,14 @@ describe('ComplaintDetailPage', () => {
     expect(screen.getByText('Reported location')).toBeInTheDocument();
     expect(screen.queryByText('Internal department')).not.toBeInTheDocument();
     expect(screen.queryByText('P2 High')).not.toBeInTheDocument();
+  });
+
+  it('does not repeat identical activity entries returned by the service', async () => {
+    const duplicateEvent = { status: 'IN_PROGRESS' as const, at: '2026-10-24T10:00:00.000Z', note: 'A public update from the team.' };
+    renderDetail(makeApi({ getComplaint: vi.fn().mockResolvedValue(makeComplaint({ history: [duplicateEvent, duplicateEvent] })) }));
+
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'Deep pothole near the bus stop' })).toBeInTheDocument());
+    expect(screen.getAllByText('A public update from the team.')).toHaveLength(1);
   });
 
   it('does not fabricate a timeline when the response has no public history', async () => {

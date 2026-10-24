@@ -51,7 +51,7 @@ export function StatusTracker({ complaint }: { complaint: Complaint }) {
 /** Full, time-ordered list of every status change. */
 export function StatusHistory({ complaint }: { complaint: Complaint }) {
   const events = Array.isArray(complaint.history)
-    ? complaint.history
+    ? deduplicateEvents(complaint.history)
         .map((event, index) => ({ event, index }))
         .sort((a, b) => timestampValue(b.event.at) - timestampValue(a.event.at) || b.index - a.index)
         .map(({ event }) => event)
@@ -61,9 +61,9 @@ export function StatusHistory({ complaint }: { complaint: Complaint }) {
   }
 
   return (
-    <ol className="border-t border-hairline">
+    <ol className="border-t border-hairline" aria-label="Public complaint status history">
       {events.map((e, i) => (
-        <li key={`${e.status}-${e.at}-${i}`} className="grid grid-cols-[8rem_1fr] md:grid-cols-[12rem_1fr] gap-4 py-3 border-b border-hairline">
+        <li key={`${e.status}-${e.at}-${i}`} className="grid gap-2 border-b border-hairline py-3 sm:grid-cols-[8rem_1fr] sm:gap-4 md:grid-cols-[12rem_1fr]">
           <time dateTime={e.at} className="text-[0.75rem] text-ink-muted pt-0.5">
             {formatDateTime(e.at)}
           </time>
@@ -80,4 +80,14 @@ export function StatusHistory({ complaint }: { complaint: Complaint }) {
 function timestampValue(value: string): number {
   const timestamp = Date.parse(value);
   return Number.isNaN(timestamp) ? 0 : timestamp;
+}
+
+function deduplicateEvents(events: NonNullable<Complaint['history']>) {
+  const seen = new Set<string>();
+  return events.filter((event) => {
+    const key = `${event.status}\u0000${event.at}\u0000${event.note ?? ''}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }

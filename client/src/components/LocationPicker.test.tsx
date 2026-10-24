@@ -26,4 +26,25 @@ describe('LocationPicker', () => {
     await waitFor(() => expect(screen.getByText('We could not get your location. Tap the map to place the pin instead.')).toBeInTheDocument());
     expect(onChange).not.toHaveBeenCalled();
   });
+
+  it('provides a keyboard-friendly coordinate alternative to map selection', () => {
+    const onChange = vi.fn();
+    render(<LocationPicker value={null} onChange={onChange} required />);
+
+    fireEvent.change(screen.getByRole('spinbutton', { name: 'Latitude' }), { target: { value: '13.0108' } });
+    fireEvent.change(screen.getByRole('spinbutton', { name: 'Longitude' }), { target: { value: '74.7943' } });
+
+    expect(onChange).toHaveBeenCalledWith({ lat: 13.0108, lng: 74.7943 });
+    expect(screen.getByText('(required)')).toBeInTheDocument();
+  });
+
+  it('clears a previously selected point when coordinates become invalid', () => {
+    const onChange = vi.fn();
+    render(<LocationPicker value={{ lat: 13.0108, lng: 74.7943 }} onChange={onChange} required />);
+
+    fireEvent.change(screen.getByRole('spinbutton', { name: 'Latitude' }), { target: { value: 'not-a-coordinate' } });
+
+    expect(onChange).toHaveBeenLastCalledWith(null);
+    expect(screen.getByText('Enter a valid latitude and longitude.')).toBeInTheDocument();
+  });
 });

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useId, useState } from 'react';
 import { CircleMarker, MapContainer, TileLayer, useMap, useMapEvents } from 'react-leaflet';
 import { isValidGeoPoint, type GeoPoint } from '../lib/domain';
 import { Button } from './Button';
@@ -31,21 +31,46 @@ const markerStyle = { color: '#ffffff', weight: 3, fillColor: '#0f62fe', fillOpa
 
 interface Props {
   value: GeoPoint | null;
-  onChange: (p: GeoPoint) => void;
+  onChange: (p: GeoPoint | null) => void;
   error?: string;
+  required?: boolean;
 }
 
-export function LocationPicker({ value, onChange, error }: Props) {
+export function LocationPicker({ value, onChange, error, required = false }: Props) {
+  const id = useId();
+  const helpId = `${id}-help`;
+  const errorId = `${id}-error`;
   const [locating, setLocating] = useState(false);
   const [geoError, setGeoError] = useState<string | null>(null);
+  const [latitude, setLatitude] = useState(value ? String(value.lat) : '');
+  const [longitude, setLongitude] = useState(value ? String(value.lng) : '');
+  const hasError = Boolean(error || geoError);
+
+  useEffect(() => {
+    setLatitude(value ? String(value.lat) : '');
+    setLongitude(value ? String(value.lng) : '');
+  }, [value]);
 
   function setLocation(point: GeoPoint) {
     if (!isValidGeoPoint(point)) {
       setGeoError('That location is not valid. Tap the map or try again.');
+      onChange(null);
       return;
     }
     setGeoError(null);
     onChange(point);
+  }
+
+  function updateCoordinates(nextLatitude: string, nextLongitude: string) {
+    setLatitude(nextLatitude);
+    setLongitude(nextLongitude);
+    const point = { lat: Number(nextLatitude), lng: Number(nextLongitude) };
+    if (nextLatitude.trim() && nextLongitude.trim() && isValidGeoPoint(point)) {
+      setLocation(point);
+    } else {
+      setGeoError('Enter a valid latitude and longitude.');
+      onChange(null);
+    }
   }
 
   function useMyLocation() {
@@ -69,13 +94,19 @@ export function LocationPicker({ value, onChange, error }: Props) {
   }
 
   return (
-    <fieldset className="flex flex-col gap-2">
-      <legend className="text-[0.75rem] tracking-[0.02em] text-ink-muted mb-2">Location</legend>
-      <div className={cx('border', error ? 'border-error outline-2 -outline-offset-2 outline-error' : 'border-hairline')}>
+    <fieldset className="flex flex-col gap-3" aria-invalid={hasError}>
+      <legend className="mb-1 text-[0.75rem] tracking-[0.02em] text-ink-muted">
+        Location{required && <span aria-hidden="true"> (required)</span>}
+      </legend>
+      <p id={helpId} className="text-[0.75rem] text-ink-muted">
+        Choose a point on the map, use your current location, or enter coordinates below.
+      </p>
+      <div className={cx('border', hasError ? 'border-error outline-2 -outline-offset-2 outline-error' : 'border-hairline')}>
         <MapContainer
           center={[DEFAULT_CENTER.lat, DEFAULT_CENTER.lng]}
           zoom={15}
           scrollWheelZoom={false}
+          aria-label="Map for choosing the reported location"
           className="h-72 md:h-80 w-full"
         >
           <TileLayer
@@ -104,7 +135,41 @@ export function LocationPicker({ value, onChange, error }: Props) {
           )}
         </p>
       </div>
-      {(error || geoError) && <p className="text-[0.75rem] text-error">{error ?? geoError}</p>}
+      <div className="grid gap-3 sm:grid-cols-2">
+        <label className="flex flex-col gap-2 text-[0.75rem] tracking-[0.02em] text-ink-muted">
+          Latitude
+          <input
+            type="number"
+            inputMode="decimal"
+            min="-90"
+            max="90"
+            step="any"
+            value={latitude}
+            required={required}
+            onChange={(event) => updateCoordinates(event.target.value, longitude)}
+            aria-describedby={hasError ? `${helpId} ${errorId}` : helpId}
+            aria-invalid={hasError}
+            className="min-h-12 w-full border-0 border-b border-field-rule bg-surface-1 px-4 text-base text-ink focus:outline-2 focus:-outline-offset-2 focus:outline-primary"
+          />
+        </label>
+        <label className="flex flex-col gap-2 text-[0.75rem] tracking-[0.02em] text-ink-muted">
+          Longitude
+          <input
+            type="number"
+            inputMode="decimal"
+            min="-180"
+            max="180"
+            step="any"
+            value={longitude}
+            required={required}
+            onChange={(event) => updateCoordinates(latitude, event.target.value)}
+            aria-describedby={hasError ? `${helpId} ${errorId}` : helpId}
+            aria-invalid={hasError}
+            className="min-h-12 w-full border-0 border-b border-field-rule bg-surface-1 px-4 text-base text-ink focus:outline-2 focus:-outline-offset-2 focus:outline-primary"
+          />
+        </label>
+      </div>
+      {(error || geoError) && <p id={errorId} className="text-[0.75rem] text-error" role="alert">{error ?? geoError}</p>}
     </fieldset>
   );
 }

@@ -19,22 +19,23 @@ const chevron =
 interface WrapperProps {
   id: string;
   label: string;
+  required?: boolean;
   optional?: boolean;
   helper?: ReactNode;
   error?: string;
   children: ReactNode;
 }
 
-function FieldWrapper({ id, label, optional, helper, error, children }: WrapperProps) {
+function FieldWrapper({ id, label, required, optional, helper, error, children }: WrapperProps) {
   return (
     <div className="flex flex-col gap-2">
-      <label htmlFor={id} className="text-[0.75rem] tracking-[0.02em] text-ink-muted">
-        {label}
-        {optional && <span className="text-ink-subtle"> (optional)</span>}
-      </label>
+      <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+        <label htmlFor={id} className="text-[0.75rem] tracking-[0.02em] text-ink-muted">{label}</label>
+        {required ? <span className="text-[0.75rem] text-ink-subtle">Required</span> : optional && <span className="text-[0.75rem] text-ink-subtle">(optional)</span>}
+      </div>
       {children}
       {error ? (
-        <p id={`${id}-msg`} className="text-[0.75rem] text-error">
+        <p id={`${id}-msg`} className="text-[0.75rem] text-error" role="alert">
           {error}
         </p>
       ) : helper ? (
@@ -46,20 +47,22 @@ function FieldWrapper({ id, label, optional, helper, error, children }: WrapperP
   );
 }
 
-type Common = { label: string; optional?: boolean; helper?: ReactNode; error?: string };
+type Common = { label: string; required?: boolean; optional?: boolean; helper?: ReactNode; error?: string };
 
 function describedBy(id: string, error?: string, helper?: ReactNode) {
   return error || helper ? `${id}-msg` : undefined;
 }
 
-export function TextInput({ label, optional, helper, error, className, ...rest }: Common & InputHTMLAttributes<HTMLInputElement>) {
+export function TextInput({ label, required, optional, helper, error, className, ...rest }: Common & InputHTMLAttributes<HTMLInputElement>) {
   const id = useId();
   return (
-    <FieldWrapper id={id} label={label} optional={optional} helper={helper} error={error}>
+    <FieldWrapper id={id} label={label} required={required} optional={optional} helper={helper} error={error}>
       <input
         id={id}
+        required={required}
         aria-invalid={!!error}
         aria-describedby={describedBy(id, error, helper)}
+        aria-errormessage={error ? `${id}-msg` : undefined}
         className={cx(fieldBase, 'min-h-12', error && fieldError, className)}
         {...rest}
       />
@@ -67,14 +70,16 @@ export function TextInput({ label, optional, helper, error, className, ...rest }
   );
 }
 
-export function TextArea({ label, optional, helper, error, className, ...rest }: Common & TextareaHTMLAttributes<HTMLTextAreaElement>) {
+export function TextArea({ label, required, optional, helper, error, className, ...rest }: Common & TextareaHTMLAttributes<HTMLTextAreaElement>) {
   const id = useId();
   return (
-    <FieldWrapper id={id} label={label} optional={optional} helper={helper} error={error}>
+    <FieldWrapper id={id} label={label} required={required} optional={optional} helper={helper} error={error}>
       <textarea
         id={id}
+        required={required}
         aria-invalid={!!error}
         aria-describedby={describedBy(id, error, helper)}
+        aria-errormessage={error ? `${id}-msg` : undefined}
         className={cx(fieldBase, 'min-h-32 py-3 resize-y', error && fieldError, className)}
         {...rest}
       />
@@ -82,14 +87,16 @@ export function TextArea({ label, optional, helper, error, className, ...rest }:
   );
 }
 
-export function Select({ label, optional, helper, error, className, children, ...rest }: Common & SelectHTMLAttributes<HTMLSelectElement>) {
+export function Select({ label, required, optional, helper, error, className, children, ...rest }: Common & SelectHTMLAttributes<HTMLSelectElement>) {
   const id = useId();
   return (
-    <FieldWrapper id={id} label={label} optional={optional} helper={helper} error={error}>
+    <FieldWrapper id={id} label={label} required={required} optional={optional} helper={helper} error={error}>
       <select
         id={id}
+        required={required}
         aria-invalid={!!error}
         aria-describedby={describedBy(id, error, helper)}
+        aria-errormessage={error ? `${id}-msg` : undefined}
         className={cx(fieldBase, 'min-h-12 appearance-none bg-no-repeat pr-10', error && fieldError, className)}
         style={{ backgroundImage: chevron, backgroundSize: '16px', backgroundPosition: 'right 1rem center' }}
         {...rest}
@@ -100,7 +107,7 @@ export function Select({ label, optional, helper, error, className, children, ..
   );
 }
 
-export function Checkbox({ label, helper, error, className, ...rest }: Omit<Common, 'optional'> & InputHTMLAttributes<HTMLInputElement>) {
+export function Checkbox({ label, required, helper, error, className, ...rest }: Omit<Common, 'optional'> & InputHTMLAttributes<HTMLInputElement>) {
   const id = useId();
   return (
     <div className="flex flex-col gap-2">
@@ -108,15 +115,17 @@ export function Checkbox({ label, helper, error, className, ...rest }: Omit<Comm
         <input
           id={id}
           type="checkbox"
+          required={required}
           aria-invalid={!!error}
           aria-describedby={describedBy(id, error, helper)}
+          aria-errormessage={error ? `${id}-msg` : undefined}
           className={cx('h-5 w-5 accent-primary', error && fieldError, className)}
           {...rest}
         />
-        <span>{label}</span>
+        <span>{label}{required && <span className="text-ink-subtle"> (required)</span>}</span>
       </label>
       {error ? (
-        <p id={`${id}-msg`} className="text-[0.75rem] text-error">
+        <p id={`${id}-msg`} className="text-[0.75rem] text-error" role="alert">
           {error}
         </p>
       ) : helper ? (

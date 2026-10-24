@@ -92,6 +92,11 @@ export function useAuth() {
   return context;
 }
 
+/** Allows data pages to react to a 401 when they are also rendered in isolation in tests. */
+export function useOptionalAuth() {
+  return useContext(AuthContext);
+}
+
 function getSessionErrorMessage(error: unknown): string {
   if (error instanceof AuthContractError) return 'The sign-in service returned an invalid session.';
   if (error instanceof ApiError && (error.status === 0 || error.status === 408)) {

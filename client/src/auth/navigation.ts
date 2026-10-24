@@ -16,7 +16,10 @@ export const ROLE_LABELS: Record<Role, string> = {
 const ROLE_DEFAULT_PATHS: Record<Role, string> = {
   citizen: '/citizen/dashboard',
   department_member: '/department',
-  department_manager: '/manager',
+  // The manager review queue is not backed by an implemented API yet. Land
+  // managers in the available read-only department workspace instead of an
+  // unavailable placeholder route.
+  department_manager: '/department',
   platform_admin: '/admin',
 };
 
