@@ -28,6 +28,7 @@ describe('loadConfig', () => {
       dbServerSelectionTimeoutMs: 10_000,
       trustProxyHops: 0,
       auth: { jwtSecret: JWT, accessTokenTtlSeconds: 900, refreshTokenTtlDays: 7, cookieSecure: false, cookieSameSite: 'lax' },
+      ai: { provider: 'disabled', apiKey: undefined, model: 'claude-opus-5-5', timeoutMs: 30_000, maxAttempts: 3 },
     });
   });
 
@@ -94,6 +95,16 @@ describe('auth config', () => {
     expect(issuesFor({ ...base, COOKIE_SAMESITE: 'none' })).toEqual(['COOKIE_SAMESITE=none requires COOKIE_SECURE=true']);
     expect(issuesFor({ ...base, COOKIE_SAMESITE: 'loose' })).toHaveLength(1);
     expect(issuesFor({ ...base, ACCESS_TOKEN_TTL_SECONDS: '10' })).toHaveLength(1);
+  });
+});
+
+describe('ai config', () => {
+  it('is disabled by default and needs a key when enabled', () => {
+    expect(loadConfig(base).ai.provider).toBe('disabled');
+    expect(issuesFor({ ...base, AI_PROVIDER: 'anthropic' })).toEqual(['ANTHROPIC_API_KEY is required when AI_PROVIDER=anthropic']);
+    expect(loadConfig({ ...base, AI_PROVIDER: 'anthropic', ANTHROPIC_API_KEY: 'sk-test' }).ai).toMatchObject({ provider: 'anthropic', model: 'claude-opus-5-5' });
+    expect(issuesFor({ ...base, AI_PROVIDER: 'openai' })).toHaveLength(1);
+    expect(issuesFor({ ...base, AI_MAX_ATTEMPTS: '9' })).toHaveLength(1);
   });
 });
 

@@ -1,6 +1,6 @@
 # CivicFix server
 
-**Status:** Phase 6. Models, the Express foundation, the MongoDB connection, health checks, logging, graceful shutdown, request validation, the response envelope, JWT authentication with role guards, user profiles, departments, memberships and complaint APIs (create, scoped list and read, manual classify and reject) exist. There are no work-order, evidence or AI APIs yet.
+**Status:** Phase 7. Models, the Express foundation, the MongoDB connection, health checks, logging, graceful shutdown, request validation, the response envelope, JWT authentication with role guards, user profiles, departments, memberships and complaint APIs (create, scoped list and read, manual classify and reject) and the AI analysis pipeline (classification, duplicate candidates, media-authenticity analyzer) exist. There are no work-order or evidence-upload APIs yet.
 
 For client developers: [`API_CONVENTIONS.md`](../docs/api/API_CONVENTIONS.md), [`AUTHENTICATION.md`](../docs/api/AUTHENTICATION.md) [`USERS_DEPARTMENTS_MEMBERSHIPS.md`](../docs/api/USERS_DEPARTMENTS_MEMBERSHIPS.md) and [`COMPLAINTS.md`](../docs/api/COMPLAINTS.md).
 
@@ -45,6 +45,9 @@ npm run dev               # tsx watch, http://localhost:4000
 | `LOG_LEVEL` | `info` (`silent` in test) | pino level |
 | `SHUTDOWN_TIMEOUT_MS` | `10000` | Time in-flight requests get during shutdown |
 | `DB_SERVER_SELECTION_TIMEOUT_MS` | `10000` | How long startup waits for MongoDB |
+| `AI_PROVIDER` | `disabled` | `disabled` or `anthropic`; see [AI_ANALYSIS_PIPELINE.md](../docs/ai/AI_ANALYSIS_PIPELINE.md) |
+| `ANTHROPIC_API_KEY` | none | Required when `AI_PROVIDER=anthropic`; never logged |
+| `AI_MODEL` / `AI_TIMEOUT_MS` / `AI_MAX_ATTEMPTS` | `claude-opus-5-5` / `30000` / `3` | Model ID, per-call timeout, attempts per job |
 | `TRUST_PROXY` | `0` | Number of reverse proxies in front of the API (0–10). Set it when deployed behind one, so client IPs and rate limits are correct. |
 
 ## Startup, database and shutdown
@@ -106,6 +109,19 @@ Membership authority is computed in `authorityOver(principal, departmentId)`: pl
 
 Access is resolved into the MongoDB query (`scope` + filters combined with `$and`); inaccessible complaints return 404. Transitions use a conditional update on the current status, so concurrent actions can't both apply.
 
+## AI analysis
+
+| Piece | File |
+|---|---|
+| Provider interface, output schemas, disabled provider | `src/ai/types.ts` |
+| Claude adapter (only file importing the SDK) and prompts | `src/ai/anthropicProvider.ts`, `src/ai/prompts.ts` |
+| DB-backed job runner (claim, lease, retry, sweep) | `src/services/analysis/runner.ts` |
+| Duplicate search and text similarity | `src/services/analysis/duplicates.ts`, `textSimilarity.ts` |
+| Media authenticity signals | `src/services/analysis/mediaAuthenticity.ts` |
+| Summary, re-run and `analyzeEvidence` | `src/services/analysis/index.ts` |
+
+`server.ts` starts the runner after the server starts listening and stops it on shutdown. `createApp` without an `analysis` dependency only queues jobs and runs nothing, which keeps tests deterministic. **After pulling Phase 7, run `npm run db:sync-indexes`** on existing databases: an `AIAnalysis` unique index changed.
+
 ## Writing routes (conventions)
 
 Feature routers are mounted in `src/routes/api.ts`. Per route: `[rate limit] → requireAuth → requireRole / requireDepartmentRole → validate(...) → handler`. Identity comes only from `req.auth`.
@@ -157,6 +173,7 @@ MONGOMS_SYSTEM_BINARY="C:/Program Files/MongoDB/Server/8.0/bin/mongod.exe" npm t
 | `tests/auth.test.ts` | Register, login, refresh rotation and reuse detection, logout, token tampering and expiry, rate limits, role and department guards, CORS, log and response secrecy |
 | `tests/departments.test.ts` | Profile updates, department CRUD and deactivation, membership add, reactivate, role change and revoke, per-department authority, concurrency, audit |
 | `tests/complaints.test.ts` | Complaint creation (field allowlist, IDs, rate limit), visibility per role and department, filters, classify and reject lifecycle, races |
+| `tests/analysis.test.ts` | AI pipeline with scripted providers: classification validation and side effects, retries, failures, crash recovery, duplicates, analysis API access, Claude adapter mapping, media authenticity |
 | `tests/conventions.test.ts` | Validation details, unknown-field rejection, 415, pagination limits, success envelope, error mapping (409/400/500), rate limit, log content |
 
 ## Transactions

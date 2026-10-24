@@ -5,7 +5,10 @@ import type { Config } from './config/env.js';
 import { errorHandler, notFound } from './middleware/errors.js';
 import { requestContext, requestLogger } from './middleware/requestContext.js';
 import { requireJson } from './middleware/requireJson.js';
+import { disabledProvider } from './ai/types.js';
 import { createAuthService } from './auth/authService.js';
+import { safeError } from './config/database.js';
+import { createAnalysisService, type AnalysisService } from './services/analysis/index.js';
 import { apiRouter } from './routes/api.js';
 import type { AuthRateLimits } from './routes/auth.js';
 import type { RateLimitOptions } from './middleware/rateLimit.js';
@@ -24,6 +27,12 @@ export interface AppDeps extends HealthDeps {
   authRateLimits?: AuthRateLimits;
   /** Override the per-user complaint creation limit (tests). */
   complaintCreateLimit?: RateLimitOptions;
+  analysisRerunLimit?: RateLimitOptions;
+  /**
+   * AI analysis. server.ts passes a running one; when omitted, jobs are only queued (AI disabled,
+   * nothing runs in the background) so tests stay deterministic.
+   */
+  analysis?: AnalysisService;
 }
 
 /**
@@ -81,6 +90,9 @@ export function createApp(deps: AppDeps): Express {
         corsOrigins: config.corsOrigins,
         rateLimits: deps.authRateLimits,
         complaintCreateLimit: deps.complaintCreateLimit,
+        analysisRerunLimit: deps.analysisRerunLimit,
+        analysisService: deps.analysis ?? createAnalysisService({ provider: disabledProvider, logger, maxAttempts: 1, autoRun: false }),
+        onHookError: (err) => logger.error({ err: safeError(err) }, 'complaint hook failed'),
       }),
   );
   app.use('/api/v1', api);

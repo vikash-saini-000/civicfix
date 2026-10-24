@@ -27,7 +27,7 @@ export const COMPLAINT_TRANSITIONS = [
 
 export type ComplaintAction = (typeof COMPLAINT_TRANSITIONS)[number]['action'];
 
-export const CURRENT_PHASE = 6;
+export const CURRENT_PHASE = 7;
 
 /** Statuses an action may start from. Throws for actions not implemented yet, so they can't be used by accident. */
 export function transitionFor(action: ComplaintAction): { from: readonly ComplaintStatus[]; to: ComplaintStatus } {

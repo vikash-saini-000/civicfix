@@ -5,6 +5,7 @@ import { requireAuth } from '../middleware/auth.js';
 import { createRateLimiter, type RateLimitOptions } from '../middleware/rateLimit.js';
 import { input, validate } from '../middleware/validate.js';
 import { CATEGORIES, COMPLAINT_STATUSES, PRIORITIES } from '../models/enums.js';
+import { JOB_TYPES, type AnalysisService, type JobType } from '../services/analysis/index.js';
 import type { ClassifyInput, ComplaintService, CreateComplaintInput, ListComplaintsQuery } from '../services/complaints.js';
 import { sendCreated, sendSuccess } from '../utils/respond.js';
 import { complaintPublicId, objectId, text } from '../validation/common.js';
@@ -58,18 +59,36 @@ const classifyBody = z.strictObject({
   note: text(1, 500).optional(),
 });
 const rejectBody = z.strictObject({ reason: text(5, 1000) });
+const rerunBody = z.strictObject({
+  types: z
+    .array(z.enum(JOB_TYPES))
+    .min(1)
+    .max(JOB_TYPES.length)
+    .refine((t) => new Set(t).size === t.length, 'Types must not repeat.')
+    .default([...JOB_TYPES]),
+});
 
 export interface ComplaintsRouterDeps {
   authService: AuthService;
   complaintService: ComplaintService;
+  analysisService: AnalysisService;
   /** Per-user limit on new complaints. */
   createLimit?: RateLimitOptions;
+  /** Per-admin limit on analysis re-runs (each may call the AI provider). */
+  rerunLimit?: RateLimitOptions;
 }
 
 export const DEFAULT_CREATE_LIMIT: RateLimitOptions = { windowMs: 60 * 60_000, limit: 20 };
+export const DEFAULT_RERUN_LIMIT: RateLimitOptions = { windowMs: 60 * 60_000, limit: 30 };
 
 /** /api/v1/complaints */
-export function complaintsRouter({ authService, complaintService, createLimit = DEFAULT_CREATE_LIMIT }: ComplaintsRouterDeps): Router {
+export function complaintsRouter({
+  authService,
+  complaintService,
+  analysisService,
+  createLimit = DEFAULT_CREATE_LIMIT,
+  rerunLimit = DEFAULT_RERUN_LIMIT,
+}: ComplaintsRouterDeps): Router {
   const router = Router();
   router.use(requireAuth(authService));
   type Params = z.infer<typeof params>;
@@ -103,6 +122,25 @@ export function complaintsRouter({ authService, complaintService, createLimit = 
     const { reason } = input<{ reason: string }>(req, 'body');
     sendSuccess(res, { complaint: await complaintService.reject(req.auth!, publicId, reason, req.id) });
   });
+
+  // --- AI analysis (staff and admins) ---
+  router.get('/:publicId/analysis', validate({ params }), async (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    const { publicId } = input<Params>(req, 'params');
+    sendSuccess(res, { analysis: await analysisService.summary(req.auth!, publicId, complaintService) });
+  });
+
+  router.post(
+    '/:publicId/analysis',
+    createRateLimiter({ ...rerunLimit, keyPart: (req) => req.auth?.userId }),
+    validate({ params, body: rerunBody }),
+    async (req, res) => {
+      const { publicId } = input<Params>(req, 'params');
+      const { types } = input<{ types: JobType[] }>(req, 'body');
+      const jobs = await analysisService.rerun(req.auth!, publicId, types, complaintService);
+      sendSuccess(res, { jobs }, { status: 202 });
+    },
+  );
 
   return router;
 }

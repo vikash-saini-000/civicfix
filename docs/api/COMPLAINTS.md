@@ -1,6 +1,6 @@
 # Complaints API
 
-Status: **Phase 6, implemented in `server/`.** All endpoints need `Authorization: Bearer <accessToken>` ([AUTHENTICATION.md](AUTHENTICATION.md)). Envelope, errors and pagination follow [API_CONVENTIONS.md](API_CONVENTIONS.md). Roles and memberships: [USERS_DEPARTMENTS_MEMBERSHIPS.md](USERS_DEPARTMENTS_MEMBERSHIPS.md).
+Status: **Phases 6–7, implemented in `server/`.** All endpoints need `Authorization: Bearer <accessToken>` ([AUTHENTICATION.md](AUTHENTICATION.md)). Envelope, errors and pagination follow [API_CONVENTIONS.md](API_CONVENTIONS.md). Roles and memberships: [USERS_DEPARTMENTS_MEMBERSHIPS.md](USERS_DEPARTMENTS_MEMBERSHIPS.md).
 
 ## Endpoints
 
@@ -11,6 +11,8 @@ Status: **Phase 6, implemented in `server/`.** All endpoints need `Authorization
 | `GET /api/v1/complaints/:publicId` | reporter, department staff, admin | One complaint |
 | `POST /api/v1/complaints/:publicId/classify` | platform admin | Manual triage: confirm category, route to a department, set priority |
 | `POST /api/v1/complaints/:publicId/reject` | platform admin, or a manager of the complaint's department | Reject during triage, with a reason shown to the citizen |
+| `GET /api/v1/complaints/:publicId/analysis` | platform admin, staff of the complaint's department | AI suggestion, duplicate candidates, media checks ([AI_ANALYSIS_PIPELINE.md](../ai/AI_ANALYSIS_PIPELINE.md)) |
+| `POST /api/v1/complaints/:publicId/analysis` | platform admin | Re-run analysis (202) |
 
 `:publicId` is the human-readable ID, e.g. `CF-2026-00141` (case-insensitive). There is **no** generic `PATCH`: status and routing change only through the action endpoints, and the citizen's original report is kept as submitted.
 
@@ -114,14 +116,15 @@ A complaint with **no department** (status `REPORTED`, not yet triaged) is visib
 
 Statuses: `REPORTED`, `UNDER_REVIEW`, `ASSIGNED`, `ACCEPTED`, `IN_PROGRESS`, `BLOCKED`, `RESOLUTION_SUBMITTED`, `VERIFICATION_REQUIRED`, `RESOLVED`, `CLOSED`, `REJECTED`.
 
-**Reachable now (Phase 6):**
+**Reachable now:**
 
 ```
+REPORTED ──AI analysis succeeds (automatic)──▶ UNDER_REVIEW
 REPORTED ──classify──▶ UNDER_REVIEW ──classify (re-route)──▶ UNDER_REVIEW
 REPORTED / UNDER_REVIEW ──reject──▶ REJECTED   (final)
 ```
 
-**Defined but not reachable yet:** assignment and work (`ASSIGNED`, `ACCEPTED`, `IN_PROGRESS`, `BLOCKED`, Phase 8), resolution and verification (`RESOLUTION_SUBMITTED`, `VERIFICATION_REQUIRED`, `RESOLVED`, `CLOSED`, reopening, Phase 9), automatic review start by AI (Phase 7). The full table is in `server/src/policies/complaintLifecycle.ts`. Citizens can never set a status.
+**Defined but not reachable yet:** assignment and work (`ASSIGNED`, `ACCEPTED`, `IN_PROGRESS`, `BLOCKED`, Phase 8), resolution and verification (`RESOLUTION_SUBMITTED`, `VERIFICATION_REQUIRED`, `RESOLVED`, `CLOSED`, reopening, Phase 9). The full table is in `server/src/policies/complaintLifecycle.ts`. Citizens can never set a status.
 
 ### POST /api/v1/complaints/:publicId/classify (platform admin)
 
@@ -166,6 +169,6 @@ If two actions race, one succeeds and the other gets `409`.
 
 ## Not implemented yet
 
-- AI classification, priority suggestions and duplicate detection (Phase 7). Until then, triage is the manual `classify` action.
+- AI suggestions are advice only: a human still routes the complaint with `classify`. When AI is disabled or fails, the complaint simply stays `REPORTED` for manual triage.
 - Work orders and assignment (Phase 8). Evidence and photo upload, resolution verification, disputes and feedback (Phase 9). Notifications (Phase 10).
 - Citizen edits or withdrawal of a complaint; a public map or anonymous reporting.

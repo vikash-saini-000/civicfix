@@ -23,9 +23,9 @@ const departmentIdsOf = (p: Principal) => p.memberships.map((m) => m.departmentI
 const managesDepartment = (p: Principal, departmentId: string | null) =>
   !!departmentId && p.memberships.some((m) => m.departmentId === departmentId && m.role === 'MANAGER');
 
-type Relation = 'admin' | 'reporter' | 'staff';
+export type Relation = 'admin' | 'reporter' | 'staff';
 
-function relationTo(p: Principal, c: { citizen: unknown; department?: unknown }): Relation | null {
+export function relationTo(p: Principal, c: { citizen: unknown; department?: unknown }): Relation | null {
   if (isAdmin(p)) return 'admin';
   if (String(c.citizen) === p.userId) return 'reporter';
   if (c.department && departmentIdsOf(p).includes(String(c.department))) return 'staff';
@@ -148,7 +148,13 @@ export interface ClassifyInput {
 
 const notFound = () => notFoundError('The complaint');
 
-export function createComplaintService() {
+export interface ComplaintServiceHooks {
+  /** Called after a complaint is stored (e.g. to queue AI analysis). Errors are logged, never surfaced. */
+  onCreated?: (complaintId: Types.ObjectId) => Promise<unknown>;
+  onHookError?: (err: unknown) => void;
+}
+
+export function createComplaintService(hooks: ComplaintServiceHooks = {}) {
   /** Loads a complaint and the caller's relation to it, or 404 if it doesn't exist or isn't visible. */
   async function loadVisible(p: Principal, publicId: string) {
     const c = (await Complaint.findOne({ publicId }).populate([...POPULATE]).lean()) as ComplaintDoc | null;
@@ -207,6 +213,8 @@ export function createComplaintService() {
         requestId,
         changes: [{ field: 'publicId', after: complaint.publicId }],
       });
+      // Analysis must never block or fail submission.
+      if (hooks.onCreated) await hooks.onCreated(complaint._id).catch((err) => hooks.onHookError?.(err));
       return reload(p, complaint._id, 'reporter');
     },
 
@@ -248,6 +256,12 @@ export function createComplaintService() {
       ]);
       const items = (docs as unknown as ComplaintDoc[]).map((c) => toView(p, c, relationTo(p, { citizen: refId(c.citizen), department: refId(c.department) }) ?? 'reporter'));
       return { items, pagination: paginationMeta(q, total) };
+    },
+
+    /** For other features (e.g. analysis): the complaint and the caller's relation, or 404. */
+    async access(p: Principal, publicId: string) {
+      const { c, relation } = await loadVisible(p, publicId);
+      return { complaintId: c._id, departmentId: refId(c.department), relation, title: c.title, description: c.description };
     },
 
     async get(p: Principal, publicId: string): Promise<ComplaintView> {

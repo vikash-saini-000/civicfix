@@ -85,11 +85,37 @@ export type ReviewDecision = (typeof REVIEW_DECISIONS)[number];
 export const DUPLICATE_LINK_SOURCES = ['SYSTEM_RULE', 'MANAGER'] as const;
 export type DuplicateLinkSource = (typeof DUPLICATE_LINK_SOURCES)[number];
 
-export const ANALYSIS_TYPES = ['TRIAGE', 'RESOLUTION_VERIFICATION', 'MEDIA_AUTHENTICITY'] as const;
+/**
+ * TRIAGE = complaint classification. DUPLICATE_CANDIDATES = possible duplicates (rule-based).
+ * MEDIA_AUTHENTICITY = signals of synthetic or edited media for one evidence file.
+ */
+export const ANALYSIS_TYPES = ['TRIAGE', 'DUPLICATE_CANDIDATES', 'RESOLUTION_VERIFICATION', 'MEDIA_AUTHENTICITY'] as const;
 export type AnalysisType = (typeof ANALYSIS_TYPES)[number];
 
-export const ANALYSIS_STATUSES = ['SUCCEEDED', 'FAILED', 'INVALID_OUTPUT'] as const;
+/** PENDING/RUNNING are job states; the rest are final. */
+export const ANALYSIS_STATUSES = ['PENDING', 'RUNNING', 'SUCCEEDED', 'FAILED', 'INVALID_OUTPUT'] as const;
 export type AnalysisStatus = (typeof ANALYSIS_STATUSES)[number];
+
+export const ANALYSIS_TRIGGERS = ['COMPLAINT_CREATED', 'MANUAL_RERUN', 'EVIDENCE_ADDED'] as const;
+export type AnalysisTrigger = (typeof ANALYSIS_TRIGGERS)[number];
+
+/** Model's own statement of how sure it is. Not a calibrated probability. */
+export const CERTAINTY_LEVELS = ['LOW', 'MEDIUM', 'HIGH'] as const;
+export type Certainty = (typeof CERTAINTY_LEVELS)[number];
+
+/** Stored authenticity outcomes. NOT_ANALYZED / ANALYSIS_PENDING are derived in the API from the record's absence or job state. */
+export const AUTHENTICITY_OUTCOMES = [
+  'NO_SUSPICIOUS_SIGNALS_DETECTED',
+  'POTENTIAL_MANIPULATION',
+  'POTENTIAL_SYNTHETIC_MEDIA',
+  'INCONCLUSIVE',
+  'ANALYSIS_FAILED',
+] as const;
+export type AuthenticityOutcome = (typeof AUTHENTICITY_OUTCOMES)[number];
+
+export const AUTHENTICITY_SIGNAL_SOURCES = ['FILE_FORMAT', 'PROVENANCE', 'METADATA', 'VISUAL_MODEL'] as const;
+export const PROVENANCE_STATES = ['NOT_PRESENT', 'PRESENT_UNVERIFIED'] as const;
+export const RELEVANCE_ASSESSMENTS = ['APPEARS_RELATED', 'APPEARS_UNRELATED', 'UNCLEAR'] as const;
 
 export const VERIFICATION_OUTCOMES = ['SUFFICIENT', 'INSUFFICIENT', 'UNCERTAIN'] as const;
 export type VerificationOutcome = (typeof VERIFICATION_OUTCOMES)[number];

@@ -21,6 +21,20 @@ export interface Config {
   /** Number of trusted reverse-proxy hops in front of the app (0 = none). Affects req.ip. */
   trustProxyHops: number;
   auth: AuthConfig;
+  ai: AiConfig;
+}
+
+export const AI_PROVIDERS = ['disabled', 'anthropic'] as const;
+export type AiProviderName = (typeof AI_PROVIDERS)[number];
+
+export interface AiConfig {
+  /** `disabled` keeps everything working without AI: complaints go to manual triage. */
+  provider: AiProviderName;
+  apiKey?: string;
+  model: string;
+  timeoutMs: number;
+  /** Attempts per analysis job, including the first. Only transient failures are retried. */
+  maxAttempts: number;
 }
 
 export const SAME_SITE_VALUES = ['strict', 'lax', 'none'] as const;
@@ -121,6 +135,15 @@ export function loadConfig(env: Env = process.env): Config {
   if (!SAME_SITE_VALUES.includes(cookieSameSite)) issues.push(`COOKIE_SAMESITE must be one of ${SAME_SITE_VALUES.join(', ')}`);
   if (cookieSameSite === 'none' && !cookieSecure) issues.push('COOKIE_SAMESITE=none requires COOKIE_SECURE=true');
 
+  const aiProvider = (read('AI_PROVIDER') ?? 'disabled') as AiProviderName;
+  if (!AI_PROVIDERS.includes(aiProvider)) issues.push(`AI_PROVIDER must be one of ${AI_PROVIDERS.join(', ')}`);
+  const anthropicKey = read('ANTHROPIC_API_KEY');
+  if (aiProvider === 'anthropic' && !anthropicKey) issues.push('ANTHROPIC_API_KEY is required when AI_PROVIDER=anthropic');
+  const aiModel = read('AI_MODEL') ?? 'claude-opus-5-5';
+  if (!/^[a-z0-9][a-z0-9.-]{2,63}$/.test(aiModel)) issues.push('AI_MODEL must be a model ID like claude-opus-5-5');
+  const aiTimeoutMs = int('AI_TIMEOUT_MS', 30_000, 5_000, 120_000);
+  const aiMaxAttempts = int('AI_MAX_ATTEMPTS', 3, 1, 5);
+
   const logLevel = (read('LOG_LEVEL') ?? (nodeEnv === 'test' ? 'silent' : 'info')) as LogLevel;
   if (!LOG_LEVELS.includes(logLevel)) issues.push(`LOG_LEVEL must be one of ${LOG_LEVELS.join(', ')}`);
 
@@ -138,6 +161,7 @@ export function loadConfig(env: Env = process.env): Config {
     dbServerSelectionTimeoutMs,
     trustProxyHops,
     auth: { jwtSecret, accessTokenTtlSeconds, refreshTokenTtlDays, cookieSecure, cookieSameSite },
+    ai: { provider: aiProvider, apiKey: anthropicKey, model: aiModel, timeoutMs: aiTimeoutMs, maxAttempts: aiMaxAttempts },
   };
 }
 
