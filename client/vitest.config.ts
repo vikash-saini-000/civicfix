@@ -7,6 +7,8 @@ export default defineConfig({
   test: {
     environment: 'jsdom',
     setupFiles: ['./src/test/setup.ts'],
+    // Page tests use the in-memory mock adapter; the HTTP adapter has its own unit tests.
+    env: { VITE_CIVICFIX_API_MODE: 'mock', VITE_CIVICFIX_AUTH_MODE: 'mock' },
     restoreMocks: true,
     clearMocks: true,
   },

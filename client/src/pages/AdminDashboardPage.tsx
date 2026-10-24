@@ -9,6 +9,7 @@ import { Card } from '../components/Card';
 import { EmptyState, ErrorState, LoadingIndicator } from '../components/Feedback';
 import { Select, TextInput } from '../components/Field';
 import { Page } from '../components/Layout';
+import { AdminLiveMetrics } from './OperationsPages';
 import { Notification } from '../components/Notification';
 import {
   buildPlatformAnalytics,
@@ -118,6 +119,8 @@ export function AdminDashboardPage({ analyticsApi = api, now }: AdminDashboardPa
       intro="Review report volume, workload, categories, and resolution timing from the authorized platform dataset."
       actions={<Button variant="tertiary" onClick={() => setReloadToken((value) => value + 1)}>Refresh data</Button>}
     >
+      {!USING_MOCK_API && api.capabilities.operations && analyticsApi === api && <AdminLiveMetrics />}
+
       {USING_MOCK_API && (
         <Notification kind="info" title="Development analytics dataset" className="mb-8">
           These values come from the complete local mock dataset. They are for interface validation only and are not production civic statistics.

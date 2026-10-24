@@ -16,10 +16,7 @@ export const ROLE_LABELS: Record<Role, string> = {
 const ROLE_DEFAULT_PATHS: Record<Role, string> = {
   citizen: '/citizen/dashboard',
   department_member: '/department',
-  // The manager review queue is not backed by an implemented API yet. Land
-  // managers in the available read-only department workspace instead of an
-  // unavailable placeholder route.
-  department_manager: '/department',
+  department_manager: '/manager',
   platform_admin: '/admin',
 };
 
@@ -32,24 +29,25 @@ const ROLE_NAVIGATION: Record<Role, NavigationItem[]> = {
   ],
   department_member: [
     { label: 'Department workspace', to: '/department', end: true },
+    { label: 'My work', to: '/department/work' },
     { label: 'Department complaints', to: '/department/complaints' },
     { label: 'Notifications', to: '/notifications' },
-    { label: 'Assigned work', to: '/department/work' },
   ],
   department_manager: [
-    { label: 'Department workspace', to: '/department', end: true },
-    { label: 'Department complaints', to: '/department/complaints' },
-    { label: 'Notifications', to: '/notifications' },
-    { label: 'Department overview', to: '/manager', end: true },
+    { label: 'Overview', to: '/manager', end: true },
     { label: 'Complaint review', to: '/manager/review' },
-    { label: 'Assignment exceptions', to: '/manager/exceptions' },
+    { label: 'Work orders', to: '/department/work' },
     { label: 'Resolution review', to: '/manager/resolution-review' },
+    { label: 'Exceptions', to: '/manager/exceptions' },
+    { label: 'Complaints', to: '/department/complaints' },
+    { label: 'Notifications', to: '/notifications' },
   ],
   platform_admin: [
     { label: 'Platform overview', to: '/admin', end: true },
-    { label: 'Notifications', to: '/notifications' },
+    { label: 'Triage queue', to: '/admin/triage' },
+    { label: 'Work orders', to: '/admin/work-orders' },
     { label: 'Departments', to: '/admin/departments' },
-    { label: 'Users', to: '/admin/users' },
+    { label: 'Notifications', to: '/notifications' },
   ],
 };
 

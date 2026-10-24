@@ -21,9 +21,10 @@ export interface AuthConfig {
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 
-export function resolveApiConfig(environment: ApiEnvironment, isDevelopment: boolean): ApiConfig {
+export function resolveApiConfig(environment: ApiEnvironment, _isDevelopment: boolean): ApiConfig {
   const configuredMode = environment.mode?.trim().toLowerCase();
-  const mode = configuredMode || (isDevelopment ? 'mock' : 'http');
+  // The real backend is the default everywhere; mock data is opt-in for UI work without a server.
+  const mode = configuredMode || 'http';
   if (mode !== 'mock' && mode !== 'http') {
     throw new ApiConfigError('VITE_CIVICFIX_API_MODE must be either "mock" or "http".');
   }
@@ -57,7 +58,7 @@ export function resolveAuthConfig(
   apiMode: ApiMode,
 ): AuthConfig {
   const configuredMode = environment.mode?.trim().toLowerCase();
-  const mode = configuredMode || apiMode || (isDevelopment ? 'mock' : 'http');
+  const mode = configuredMode || apiMode;
   if (mode !== 'mock' && mode !== 'http') {
     throw new ApiConfigError('VITE_CIVICFIX_AUTH_MODE must be either "mock" or "http".');
   }

@@ -4,6 +4,7 @@ import { api } from '../api';
 import { ApiError } from '../api/errors';
 import type { ComplaintApi } from '../api/types';
 import { useOptionalAuth } from '../auth/AuthContext';
+import { BackendNotifications } from '../components/BackendNotifications';
 import { Card } from '../components/Card';
 import { EmptyState, ErrorState, LoadingIndicator } from '../components/Feedback';
 import { Page } from '../components/Layout';
@@ -19,6 +20,20 @@ interface NotificationsPageProps {
 }
 
 export function NotificationsPage({ complaintApi = api }: NotificationsPageProps) {
+  const auth = useOptionalAuth();
+  const role = auth?.state.user?.role;
+  if (complaintApi.capabilities?.operations && role) {
+    return (
+      <Page title="Notifications" intro="Updates about your complaints and work, newest first.">
+        <BackendNotifications role={role} />
+      </Page>
+    );
+  }
+  return <ComplaintActivityFeed complaintApi={complaintApi} />;
+}
+
+/** Mock-mode fallback: derives activity from the citizen's complaint history. */
+function ComplaintActivityFeed({ complaintApi }: { complaintApi: ComplaintApi }) {
   const auth = useOptionalAuth();
   const refreshSession = auth?.refreshSession;
   const isCitizen = auth?.state.user?.role === 'citizen';

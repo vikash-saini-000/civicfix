@@ -23,7 +23,7 @@ const DepartmentWorkspacePage = lazy(() =>
   import('../pages/DepartmentWorkspacePage').then(({ DepartmentWorkspacePage: Component }) => ({ default: Component })),
 );
 const LoginPage = lazy(() => import('../pages/PlaceholderPages').then(({ LoginPage: Component }) => ({ default: Component })));
-const RegisterPage = lazy(() => import('../pages/PlaceholderPages').then(({ RegisterPage: Component }) => ({ default: Component })));
+const RegisterPage = lazy(() => import('../pages/RegisterPage').then(({ RegisterPage: Component }) => ({ default: Component })));
 const RolePlaceholderPage = lazy(() =>
   import('../pages/PlaceholderPages').then(({ RolePlaceholderPage: Component }) => ({ default: Component })),
 );
@@ -33,6 +33,16 @@ const ManagerReviewDetailPage = lazy(() =>
 );
 const ManagerReviewPage = lazy(() =>
   import('../pages/ManagerReviewPage').then(({ ManagerReviewPage: Component }) => ({ default: Component })),
+);
+const WorkOrdersPage = lazy(() => import('../pages/WorkOrdersPage').then(({ WorkOrdersPage: Component }) => ({ default: Component })));
+const WorkOrderDetailPage = lazy(() =>
+  import('../pages/WorkOrderDetailPage').then(({ WorkOrderDetailPage: Component }) => ({ default: Component })),
+);
+const ManagerOverviewPage = lazy(() =>
+  import('../pages/OperationsPages').then(({ ManagerOverviewPage: Component }) => ({ default: Component })),
+);
+const AdminDepartmentsPage = lazy(() =>
+  import('../pages/OperationsPages').then(({ AdminDepartmentsPage: Component }) => ({ default: Component })),
 );
 const NotificationsPage = lazy(() =>
   import('../pages/NotificationsPage').then(({ NotificationsPage: Component }) => ({ default: Component })),
@@ -72,11 +82,23 @@ export function AppRoutes() {
         <Route path="department" element={<DepartmentGuard><DepartmentWorkspacePage /></DepartmentGuard>} />
         <Route path="department/complaints" element={<DepartmentGuard><DepartmentComplaintsPage /></DepartmentGuard>} />
         <Route path="department/complaints/:complaintId" element={<DepartmentGuard><DepartmentComplaintDetailPage /></DepartmentGuard>} />
+        <Route path="department/work" element={<DepartmentGuard><WorkOrdersPage view="work" /></DepartmentGuard>} />
+        <Route
+          path="work-orders/:workOrderId"
+          element={<Guarded roles={['department_member', 'department_manager', 'platform_admin']}><WorkOrderDetailPage /></Guarded>}
+        />
         <Route path="department/*" element={<DepartmentGuard><RolePlaceholderPage role="Department member" /></DepartmentGuard>} />
         <Route path="manager/review/:complaintId" element={<Guarded roles={['department_manager']}><ManagerReviewDetailPage /></Guarded>} />
         <Route path="manager/review" element={<Guarded roles={['department_manager']}><ManagerReviewPage /></Guarded>} />
+        <Route path="manager" element={<Guarded roles={['department_manager']}><ManagerOverviewPage /></Guarded>} />
+        <Route path="manager/exceptions" element={<Guarded roles={['department_manager']}><WorkOrdersPage view="exceptions" /></Guarded>} />
+        <Route path="manager/resolution-review" element={<Guarded roles={['department_manager']}><WorkOrdersPage view="verification" /></Guarded>} />
         <Route path="manager/*" element={<Guarded roles={['department_manager']}><RolePlaceholderPage role="Department manager" /></Guarded>} />
         <Route path="admin" element={<Guarded roles={['platform_admin']}><AdminDashboardPage /></Guarded>} />
+        <Route path="admin/triage" element={<Guarded roles={['platform_admin']}><ManagerReviewPage /></Guarded>} />
+        <Route path="admin/triage/:complaintId" element={<Guarded roles={['platform_admin']}><ManagerReviewDetailPage /></Guarded>} />
+        <Route path="admin/work-orders" element={<Guarded roles={['platform_admin']}><WorkOrdersPage view="all" /></Guarded>} />
+        <Route path="admin/departments" element={<Guarded roles={['platform_admin']}><AdminDepartmentsPage /></Guarded>} />
         <Route path="admin/*" element={<Guarded roles={['platform_admin']}><RolePlaceholderPage role="Platform administrator" /></Guarded>} />
         <Route path="*" element={<NotFound />} />
       </Route>

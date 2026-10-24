@@ -117,7 +117,8 @@ async function main() {
   const citizen = (await ok(call('POST', '/auth/register', undefined, { name: 'Live Check Citizen', email: `citizen.${stamp}@civicfix.local`, password: `${PASSWORD}-${stamp}` }), 201, 'register citizen')).accessToken as string;
   check((await call('POST', '/auth/register', undefined, { name: 'Eve', email: `eve.${stamp}@civicfix.local`, password: 'eve long password', platformRole: 'PLATFORM_ADMIN' })).status === 400, 'self-promotion to admin rejected');
   const me = await ok(call('GET', '/auth/me', manager), 200, 'manager profile');
-  const roads = (await ok(call('GET', '/departments', admin), 200, 'list departments')).find((d: any) => d.categories?.includes('roads')) ?? null;
+  // Seed data has two roads departments (main + South Zone); the seeded roads.* staff belong to the main one.
+  const roads = (await ok(call('GET', '/departments', admin), 200, 'list departments')).find((d: any) => d.name === 'Roads and Public Works') ?? null;
   check(roads, 'Roads department exists (run npm run db:seed if not)');
   if (!roads) throw new Error('Seed data missing');
   void me;

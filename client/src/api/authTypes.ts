@@ -7,7 +7,7 @@ export interface DepartmentMembership {
   role: 'member' | 'manager';
 }
 
-/** Provisional client contract: the backend auth schema is proposed, not implemented yet. */
+/** Client view of the signed-in user. The HTTP adapter maps the backend user (docs/api/AUTHENTICATION.md) to this shape. */
 export interface AuthUser {
   id: string;
   email: string;
@@ -25,8 +25,16 @@ export interface AuthSession {
   user: AuthUser;
 }
 
+export interface RegisterInput {
+  name: string;
+  email: string;
+  password: string;
+}
+
 export interface AuthApi {
   login(credentials: LoginCredentials, signal?: AbortSignal): Promise<AuthSession>;
+  /** Creates a citizen account and signs in. Absent in adapters without registration. */
+  register?(input: RegisterInput, signal?: AbortSignal): Promise<AuthSession>;
   getCurrentUser(signal?: AbortSignal): Promise<AuthUser | null>;
   logout(signal?: AbortSignal): Promise<void>;
 }

@@ -1,6 +1,6 @@
 import { Suspense, useEffect, useRef, useState, type ReactNode } from 'react';
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router';
-import { API_MODE, AUTH_MODE, USING_MOCK_API } from '../api';
+import { API_MODE, AUTH_MODE, USING_MOCK_API, api } from '../api';
 import { ROLE_LABELS, navigationForRole, type NavigationItem } from '../auth/navigation';
 import { useAuth } from '../auth/AuthContext';
 import { Badge } from './Badge';
@@ -14,6 +14,7 @@ const PUBLIC_NAVIGATION: NavigationItem[] = [
   { label: 'Report a problem', to: '/citizen/complaints/new' },
   { label: 'My complaints', to: '/citizen/complaints' },
   { label: 'Log in', to: '/login' },
+  { label: 'Sign up', to: '/register' },
 ];
 
 const navItem = ({ isActive }: { isActive: boolean }) =>
@@ -36,6 +37,7 @@ export function Layout() {
   const user = state.status === 'authenticated' ? state.user : null;
   const isAuthenticated = user !== null;
   const navigation = user ? navigationForRole(user.role) : PUBLIC_NAVIGATION;
+  const unread = useUnreadCount(Boolean(user) && Boolean(api.capabilities.operations), location.pathname);
 
   useEffect(() => {
     setMobileOpen(false);
@@ -84,7 +86,7 @@ export function Layout() {
           </NavLink>
 
           <nav aria-label="Main navigation" className="hidden min-w-0 items-center md:flex">
-            {navigation.map((item) => <NavigationLink key={item.to} item={item} />)}
+            {navigation.map((item) => <NavigationLink key={item.to} item={item} badge={item.to === '/notifications' ? unread : 0} />)}
           </nav>
 
           <div className="flex items-center gap-2">
@@ -127,7 +129,7 @@ export function Layout() {
               }
             }}
           >
-            {navigation.map((item) => <NavigationLink key={item.to} item={item} mobile />)}
+            {navigation.map((item) => <NavigationLink key={item.to} item={item} mobile badge={item.to === '/notifications' ? unread : 0} />)}
             {isAuthenticated && user && (
               <div className="flex items-center justify-between gap-3 border-t border-hairline pt-3">
                 <div>
@@ -205,12 +207,49 @@ export function Layout() {
   );
 }
 
-function NavigationLink({ item, mobile = false }: { item: NavigationItem; mobile?: boolean }) {
+function NavigationLink({ item, mobile = false, badge = 0 }: { item: NavigationItem; mobile?: boolean; badge?: number }) {
   return (
     <NavLink to={item.to} end={item.end} className={({ isActive }) => cx(navItem({ isActive }), mobile && 'w-full')}>
       {item.label}
+      {badge > 0 && (
+        <span className="ml-2 inline-flex min-w-5 items-center justify-center rounded-full bg-primary px-1 text-[0.75rem] text-on-primary">
+          {badge > 99 ? '99+' : badge}
+          <span className="sr-only"> unread</span>
+        </span>
+      )}
     </NavLink>
   );
+}
+
+/** Unread notification count, refreshed on navigation, focus and after notifications change. */
+function useUnreadCount(enabled: boolean, pathname: string): number {
+  const [count, setCount] = useState(0);
+  const [tick, setTick] = useState(0);
+  useEffect(() => {
+    if (!enabled) return;
+    const bump = () => setTick((t) => t + 1);
+    window.addEventListener('civicfix:notifications-changed', bump);
+    window.addEventListener('focus', bump);
+    const timer = window.setInterval(() => document.visibilityState === 'visible' && bump(), 60_000);
+    return () => {
+      window.removeEventListener('civicfix:notifications-changed', bump);
+      window.removeEventListener('focus', bump);
+      window.clearInterval(timer);
+    };
+  }, [enabled]);
+  useEffect(() => {
+    if (!enabled) {
+      setCount(0);
+      return;
+    }
+    const controller = new AbortController();
+    api
+      .unreadNotificationCount(controller.signal)
+      .then((n) => !controller.signal.aborted && setCount(n))
+      .catch(() => undefined);
+    return () => controller.abort();
+  }, [enabled, pathname, tick]);
+  return count;
 }
 
 export function Page({

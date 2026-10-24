@@ -16,6 +16,7 @@ import { PriorityBadge, StatusTag } from '../components/Tag';
 import { isUsableComplaintId, complaintLocationLabel } from '../lib/complaints';
 import { categoryLabel, formatDateTime, getStatusMeta, isValidGeoPoint } from '../lib/domain';
 import { staffLoadErrorMessage } from '../lib/department';
+import { AnalysisPanel, EvidencePanel } from '../components/Workflow';
 
 type LoadError = 'invalid' | 'not-found' | 'forbidden' | 'failed';
 type DetailState =
@@ -31,6 +32,7 @@ export function DepartmentComplaintDetailPage({ departmentApi = api }: Departmen
   const { context, memberships, selectDepartment, hasInvalidRequestedContext } = useDepartmentContext();
   const [state, setState] = useState<DetailState | null>(null);
   const [reloadToken, setReloadToken] = useState(0);
+  const operations = Boolean((departmentApi as Partial<{ capabilities: { operations?: boolean } }>).capabilities?.operations);
 
   useEffect(() => {
     if (!context || !isUsableComplaintId(complaintId)) {
@@ -132,9 +134,15 @@ export function DepartmentComplaintDetailPage({ departmentApi = api }: Departmen
       </section>
 
       <div className="grid gap-12 lg:grid-cols-[1fr_22rem]">
-        <section aria-labelledby="staff-updates-heading">
-          <h2 id="staff-updates-heading" className="mb-4 text-[1.25rem]">Available status history</h2>
-          <StatusHistory complaint={complaint} />
+        <section aria-labelledby="staff-updates-heading" className="flex flex-col gap-8">
+          {operations && (complaint.status === 'REPORTED' || complaint.status === 'UNDER_REVIEW') && context.membershipRole === 'manager' && (
+            <ButtonLink to={`/manager/review/${encodeURIComponent(complaint.publicId)}`} className="self-start">Review and route this complaint</ButtonLink>
+          )}
+          {operations && <AnalysisPanel publicId={complaint.publicId} />}
+          <div>
+            <h2 id="staff-updates-heading" className="mb-4 text-[1.25rem]">Available status history</h2>
+            <StatusHistory complaint={complaint} />
+          </div>
         </section>
         <section aria-labelledby="staff-details-heading" className="flex flex-col gap-6">
           <h2 id="staff-details-heading" className="text-[1.25rem]">Complaint details</h2>
@@ -147,6 +155,12 @@ export function DepartmentComplaintDetailPage({ departmentApi = api }: Departmen
             <dd>{formatDateTime(complaint.createdAt)}</dd>
             <dt className="text-ink-muted">Last updated</dt>
             <dd>{formatDateTime(complaint.updatedAt)}</dd>
+            {complaint.reporterAlias && (
+              <>
+                <dt className="text-ink-muted">Reporter</dt>
+                <dd>{complaint.reporterAlias}</dd>
+              </>
+            )}
             {complaint.photoCount !== undefined && (
               <>
                 <dt className="text-ink-muted">Evidence</dt>
@@ -163,6 +177,7 @@ export function DepartmentComplaintDetailPage({ departmentApi = api }: Departmen
             <p className="text-[0.875rem] text-ink-muted">{complaintLocationLabel(complaint)}</p>
           </div>
           <ReportedLocation complaint={complaint} />
+          {operations && <EvidencePanel publicId={complaint.publicId} showAuthenticity />}
           <ButtonLink to="/department/complaints" variant="ghost" className="self-start -ml-4">← Back to department complaints</ButtonLink>
         </section>
       </div>

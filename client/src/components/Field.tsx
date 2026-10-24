@@ -1,5 +1,6 @@
 import {
   useId,
+  type Ref,
   type InputHTMLAttributes,
   type ReactNode,
   type SelectHTMLAttributes,
@@ -53,7 +54,7 @@ function describedBy(id: string, error?: string, helper?: ReactNode) {
   return error || helper ? `${id}-msg` : undefined;
 }
 
-export function TextInput({ label, required, optional, helper, error, className, ...rest }: Common & InputHTMLAttributes<HTMLInputElement>) {
+export function TextInput({ label, required, optional, helper, error, className, ...rest }: Common & InputHTMLAttributes<HTMLInputElement> & { ref?: Ref<HTMLInputElement> }) {
   const id = useId();
   return (
     <FieldWrapper id={id} label={label} required={required} optional={optional} helper={helper} error={error}>
@@ -107,7 +108,7 @@ export function Select({ label, required, optional, helper, error, className, ch
   );
 }
 
-export function Checkbox({ label, required, helper, error, className, ...rest }: Omit<Common, 'optional'> & InputHTMLAttributes<HTMLInputElement>) {
+export function Checkbox({ label, required, helper, error, className, ...rest }: Omit<Common, 'optional'> & InputHTMLAttributes<HTMLInputElement> & { ref?: Ref<HTMLInputElement> }) {
   const id = useId();
   return (
     <div className="flex flex-col gap-2">

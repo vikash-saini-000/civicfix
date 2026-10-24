@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Link } from 'react-router';
+import { Link, useLocation, useNavigate } from 'react-router';
 import { api } from '../api';
 import { ApiError } from '../api/errors';
 import type { ComplaintApi } from '../api/types';
@@ -87,6 +87,7 @@ export function DashboardPage({ complaintApi = api }: DashboardPageProps) {
       intro="See what is happening with the civic issues you have reported."
       actions={<ButtonLink to="/citizen/complaints/new">Report an issue</ButtonLink>}
     >
+      <WelcomePanel name={auth?.state.user?.displayName} hasComplaints={complaints.length > 0} />
       <div className="flex flex-col gap-10">
         <section aria-labelledby="summary-heading">
           <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
@@ -160,5 +161,55 @@ function RecentComplaint({ complaint }: { complaint: Complaint }) {
         </div>
       </Link>
     </li>
+  );
+}
+
+/**
+ * Shown once, right after sign-up (navigation state `welcome`). Dismissing it clears the state so a
+ * reload or back navigation does not show it again.
+ */
+function WelcomePanel({ name, hasComplaints }: { name?: string; hasComplaints: boolean }) {
+  const location = useLocation();
+  const navigate = useNavigate();
+  const welcome = (location.state as { welcome?: boolean } | null)?.welcome === true;
+  if (!welcome) return null;
+  const firstName = name?.trim().split(/\s+/)[0];
+
+  function dismiss() {
+    navigate(`${location.pathname}${location.search}`, { replace: true, state: null });
+  }
+
+  return (
+    <section aria-labelledby="welcome-heading" className="mb-10 grid gap-0 border border-hairline md:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]">
+      <div className="bg-primary p-6 text-white md:p-8">
+        <p className="font-mono text-[0.75rem] uppercase tracking-[0.12em] text-[#d0e2ff]">Account created</p>
+        <h2 id="welcome-heading" className="mt-3 text-[1.75rem] leading-tight text-white">
+          Welcome to CivicFix{firstName ? `, ${firstName}` : ''}.
+        </h2>
+        <p className="mt-3 text-[0.875rem] text-[#d0e2ff]">You are signed in. Here is how to get the most out of your account.</p>
+      </div>
+      <div className="flex flex-col gap-5 bg-canvas p-6 md:p-8">
+        <ol className="flex flex-col gap-4 text-[0.875rem]">
+          <li className="grid grid-cols-[2rem_1fr] gap-2">
+            <span className="font-mono text-primary">01</span>
+            <span><strong className="font-semibold">Report a problem</strong> with a clear title, a map pin and a photo.</span>
+          </li>
+          <li className="grid grid-cols-[2rem_1fr] gap-2">
+            <span className="font-mono text-primary">02</span>
+            <span><strong className="font-semibold">Watch your notifications</strong> for review, assignment and work updates.</span>
+          </li>
+          <li className="grid grid-cols-[2rem_1fr] gap-2">
+            <span className="font-mono text-primary">03</span>
+            <span><strong className="font-semibold">Confirm the fix</strong> when it is resolved, or dispute it if it is not.</span>
+          </li>
+        </ol>
+        <div className="flex flex-wrap gap-3">
+          <ButtonLink to="/citizen/complaints/new" state={null}>{hasComplaints ? 'Report another problem' : 'Report your first problem'}</ButtonLink>
+          <button type="button" onClick={dismiss} className="min-h-12 px-4 text-[0.875rem] text-primary hover:bg-surface-1">
+            Dismiss
+          </button>
+        </div>
+      </div>
+    </section>
   );
 }

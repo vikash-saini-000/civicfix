@@ -92,7 +92,9 @@ export function ReportPage({ complaintApi = api }: ReportPageProps) {
         selectedCategory: category || null,
         photos: photoAttachmentsSupported ? photos : [],
       });
-       navigate(`/citizen/complaints/${created.publicId}`, { state: { justSubmitted: true } });
+      navigate(`/citizen/complaints/${created.publicId}`, {
+        state: { justSubmitted: true, photoUploadFailures: created.photoUploadFailures ?? 0 },
+      });
     } catch (error) {
       setSubmitError(getSubmissionErrorMessage(error));
     } finally {
@@ -175,7 +177,7 @@ export function ReportPage({ complaintApi = api }: ReportPageProps) {
                     optional
                     value={category}
                     onChange={(event) => setCategory(event.target.value as CategoryId | '')}
-                    helper="Not sure? Leave it blank. The backend can classify it later."
+                    helper="Not sure? Leave it blank and we will classify it."
                   >
                     <option value="">Not sure</option>
                     {CATEGORIES.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
@@ -271,7 +273,8 @@ export function ReportPage({ complaintApi = api }: ReportPageProps) {
           <ol className="flex list-decimal flex-col gap-3 pl-5 text-ink-muted">
             <li>Your report is saved with a reference number.</li>
             <li>The civic team reviews the details and location.</li>
-            <li>Later stages may classify and route the report.</li>
+            <li>AI suggests a category and team; a person confirms when unsure.</li>
+            <li>The team fixes it, and the fix is checked before it is marked resolved.</li>
           </ol>
           <p className="mt-6 text-[0.75rem] text-ink-muted">
             In an emergency involving fire, injury, or a live electric wire, call <strong className="text-ink">112</strong> first.

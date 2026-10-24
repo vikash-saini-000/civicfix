@@ -3,6 +3,8 @@ import { Button } from './Button';
 
 export const MAX_PHOTOS = 3;
 export const MAX_PHOTO_BYTES = 10 * 1024 * 1024;
+/** Image types the backend accepts (checked again on the server from the file's bytes). */
+const ACCEPTED_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
 
 interface Props {
   files: File[];
@@ -35,13 +37,13 @@ export function PhotoInput({ files, onChange, onError, error, disabled = false, 
   function add(list: FileList | null) {
     if (!list || disabled) return;
     const selected = Array.from(list);
-    const invalidType = selected.find((file) => !file.type.startsWith('image/'));
+    const invalidType = selected.find((file) => !ACCEPTED_TYPES.includes(file.type));
     const invalidSize = selected.find((file) => file.size > MAX_PHOTO_BYTES);
     const available = MAX_PHOTOS - files.length;
-    const validImages = selected.filter((file) => file.type.startsWith('image/') && file.size <= MAX_PHOTO_BYTES);
+    const validImages = selected.filter((file) => ACCEPTED_TYPES.includes(file.type) && file.size <= MAX_PHOTO_BYTES);
 
     if (available > 0 && validImages.length > 0) onChange([...files, ...validImages.slice(0, available)]);
-    if (invalidType) reportError('Choose image files only.');
+    if (invalidType) reportError('Choose JPEG, PNG or WebP images only.');
     else if (invalidSize) reportError('Each image must be 10 MB or smaller.');
     else if (validImages.length > available) reportError(`You can attach up to ${MAX_PHOTOS} photos.`);
     else reportError(undefined);
@@ -58,7 +60,7 @@ export function PhotoInput({ files, onChange, onError, error, disabled = false, 
         Photos <span className="text-ink-subtle">(optional, up to {MAX_PHOTOS})</span>
       </span>
        <p id={helpId} className="text-[0.75rem] text-ink-muted">
-        Images only, up to 10 MB each. Do not include private documents or unnecessary personal information.
+        JPEG, PNG or WebP, up to 10 MB each. Do not include private documents or unnecessary personal information.
       </p>
       {disabledReason && <p className="text-[0.75rem] text-ink-muted">{disabledReason}</p>}
       {files.length > 0 && (
@@ -91,7 +93,7 @@ export function PhotoInput({ files, onChange, onError, error, disabled = false, 
             ref={inputRef}
             id={id}
             type="file"
-            accept="image/*"
+            accept={ACCEPTED_TYPES.join(',')}
             multiple
             disabled={disabled}
             className="sr-only"

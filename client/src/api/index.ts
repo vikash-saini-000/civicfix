@@ -2,6 +2,7 @@ import { getApiConfig, getAuthConfig, type ApiConfig, type AuthConfig } from './
 import { HttpCivicFixApi } from './httpApi';
 import { createMockApi } from './mockApi';
 import { createMockAuthApi } from './mockAuthApi';
+import { createMockOperationsApi } from './mockOperationsApi';
 import type { CivicFixApi } from './types';
 
 const config = getApiConfig();
@@ -12,7 +13,7 @@ export function createConfiguredApi(apiConfig: ApiConfig, configuredAuth: AuthCo
     throw new Error('API and authentication adapters must use the same mode.');
   }
   if (apiConfig.mode === 'mock') {
-    return { ...createMockApi(), ...createMockAuthApi() };
+    return { ...createMockApi(), ...createMockAuthApi(), ...createMockOperationsApi() };
   }
   return new HttpCivicFixApi({ baseUrl: apiConfig.baseUrl, timeoutMs: apiConfig.timeoutMs });
 }

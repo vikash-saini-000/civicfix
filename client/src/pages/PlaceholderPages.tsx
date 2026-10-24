@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
-import { useLocation, useNavigate } from 'react-router';
+import { Link, useLocation, useNavigate } from 'react-router';
 import { API_MODE, AUTH_MODE } from '../api';
 import type { Role } from '../api/authTypes';
 import { MOCK_AUTH_MODE_LABEL } from '../api/mockAuthApi';
@@ -18,7 +18,7 @@ export function LoginPage() {
   const navigate = useNavigate();
   const location = useLocation();
   const { state, isSubmitting, actionError, login } = useAuth();
-  const [email, setEmail] = useState('');
+  const [email, setEmail] = useState(() => new URLSearchParams(location.search).get('email')?.slice(0, 254) ?? '');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [errors, setErrors] = useState<LoginErrors>({});
@@ -119,6 +119,15 @@ export function LoginPage() {
             <Button type="submit" disabled={isSubmitting}>
               {isSubmitting ? 'Signing in…' : 'Sign in'}
             </Button>
+            {API_MODE === 'http' && (
+              <p className="text-[0.875rem] text-ink-muted">
+                New to CivicFix?{' '}
+                <Link to={`/register${new URLSearchParams(location.search).get('next') ? `?next=${encodeURIComponent(new URLSearchParams(location.search).get('next')!)}` : ''}`}>
+                  Create a citizen account
+                </Link>
+                .
+              </p>
+            )}
           </form>
         </Card>
 
@@ -138,33 +147,16 @@ export function LoginPage() {
   );
 }
 
-export function RegisterPage() {
-  return (
-    <Page
-      title="Create an account"
-      intro="Public registration is not enabled until the backend identity contract is available."
-    >
-      <Card className="max-w-xl">
-        <EmptyState
-          title="Registration is not available yet"
-          description="No account or privileged role can be created from this screen. Registration will be added only when the backend contract is approved."
-          action={<ButtonLink to="/login" variant="tertiary">Return to log in</ButtonLink>}
-        />
-      </Card>
-    </Page>
-  );
-}
-
 export function RolePlaceholderPage({ role }: { role: string }) {
   return (
     <Page
       title={`${role} workspace`}
-      intro="The route is protected by the validated account role and reserved for a later workflow phase."
+      intro="Page not found in this workspace."
     >
       <Card className="max-w-2xl">
         <EmptyState
-          title="Workspace foundation ready"
-          description={`The ${ROLE_LABELS[roleToKey(role)] ?? role} navigation is available, but this operational workflow is not implemented in the current backend contract.`}
+          title="Page not found"
+          description={`This ${ROLE_LABELS[roleToKey(role)] ?? role} page does not exist. Use the navigation above to reach your workspace.`}
           action={<ButtonLink to="/">Return to the public home page</ButtonLink>}
         />
       </Card>

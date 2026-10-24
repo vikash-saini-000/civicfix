@@ -59,6 +59,10 @@ export function createMockAuthApi(): AuthApi {
       return { user: structuredClone(currentUser) };
     },
 
+    async register(): Promise<AuthSession> {
+      throw new ApiError('Registration needs the CivicFix backend.', 501, 'BACKEND_REQUIRED');
+    },
+
     async getCurrentUser() {
       return currentUser ? structuredClone(currentUser) : null;
     },

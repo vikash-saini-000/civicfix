@@ -24,7 +24,7 @@ describe('PhotoInput', () => {
     expect(onError).toHaveBeenLastCalledWith(undefined);
 
     fireEvent.change(input, { target: { files: [new File(['text'], 'notes.txt', { type: 'text/plain' })] } });
-    expect(onError).toHaveBeenLastCalledWith('Choose image files only.');
+    expect(onError).toHaveBeenLastCalledWith('Choose JPEG, PNG or WebP images only.');
 
     const oversized = new File([new Uint8Array(MAX_PHOTO_BYTES + 1)], 'large.png', { type: 'image/png' });
     fireEvent.change(input, { target: { files: [oversized] } });

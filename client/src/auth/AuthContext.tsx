@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { api } from '../api';
-import type { AuthApi, AuthUser, LoginCredentials } from '../api/authTypes';
+import type { AuthApi, AuthUser, LoginCredentials, RegisterInput } from '../api/authTypes';
 import { ApiError } from '../api/errors';
 import { AuthContractError, parseAuthSession, parseAuthUser } from './validation';
 
@@ -17,6 +17,8 @@ interface AuthContextValue {
   isSubmitting: boolean;
   actionError: string | null;
   login(credentials: LoginCredentials): Promise<AuthUser>;
+  /** Undefined when the configured adapter has no registration. */
+  register?: (input: RegisterInput) => Promise<AuthUser>;
   logout(): Promise<void>;
   refreshSession(): Promise<void>;
 }
@@ -67,6 +69,25 @@ export function AuthProvider({ children, authApi = api }: { children: ReactNode;
     [authApi],
   );
 
+  const register = useMemo(() => {
+    const create = authApi.register?.bind(authApi);
+    if (!create) return undefined;
+    return async (input: RegisterInput) => {
+      setIsSubmitting(true);
+      setActionError(null);
+      try {
+        const session = parseAuthSession(await create(input));
+        setState({ status: 'authenticated', user: session.user, error: null });
+        return session.user;
+      } catch (error) {
+        setActionError(getRegisterErrorMessage(error));
+        throw error;
+      } finally {
+        setIsSubmitting(false);
+      }
+    };
+  }, [authApi]);
+
   const logout = useCallback(async () => {
     setActionError(null);
     try {
@@ -79,8 +100,8 @@ export function AuthProvider({ children, authApi = api }: { children: ReactNode;
   }, [authApi]);
 
   const value = useMemo(
-    () => ({ state, isSubmitting, actionError, login, logout, refreshSession }),
-    [actionError, isSubmitting, login, logout, refreshSession, state],
+    () => ({ state, isSubmitting, actionError, login, register, logout, refreshSession }),
+    [actionError, isSubmitting, login, logout, refreshSession, register, state],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
@@ -105,10 +126,21 @@ function getSessionErrorMessage(error: unknown): string {
   return 'We could not verify your session. Try again.';
 }
 
+function getRegisterErrorMessage(error: unknown): string {
+  if (error instanceof ApiError && error.status === 409) return 'An account with this email already exists. Try signing in.';
+  if (error instanceof ApiError && error.status === 429) return 'Too many sign-up attempts. Please wait and try again.';
+  if (error instanceof ApiError && error.status === 400) return 'Check the highlighted details and try again.';
+  if (error instanceof ApiError && (error.status === 0 || error.status === 408)) {
+    return 'The sign-up service could not be reached. Check your connection and try again.';
+  }
+  return 'We could not create your account. Please try again.';
+}
+
 function getAuthActionErrorMessage(error: unknown, fallback = 'We could not sign you in. Please try again.'): string {
   if (error instanceof ApiError && (error.status === 401 || error.status === 403)) {
     return 'The email or password is incorrect.';
   }
+  if (error instanceof ApiError && error.status === 429) return 'Too many sign-in attempts. Please wait a few minutes and try again.';
   if (error instanceof ApiError && (error.status === 0 || error.status === 408)) {
     return 'The sign-in service could not be reached. Check your connection and try again.';
   }

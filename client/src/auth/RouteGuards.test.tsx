@@ -84,8 +84,9 @@ describe('protected route behavior', () => {
       departmentMemberships: [{ departmentId: 'roads', departmentName: 'Roads and Public Works', role: 'manager' }],
     }));
 
-    await waitFor(() => expect(screen.getByRole('heading', { name: /workspace$/i })).toBeInTheDocument());
-    expect(screen.getByRole('heading', { name: 'Roads and Public Works workspace' })).toBeInTheDocument();
+    // Managers land on their department overview.
+    await waitFor(() => expect(screen.getByTestId('current-location')).toHaveTextContent(/^\/manager$/));
+    expect(await screen.findByRole('heading', { name: 'Department overview' })).toBeInTheDocument();
   });
 
   it('shows a forbidden state when a citizen opens a manager route', async () => {
@@ -134,8 +135,8 @@ describe('protected route behavior', () => {
     }));
 
     await waitFor(() => expect(screen.getByRole('heading', { name: /workspace$/i })).toBeInTheDocument());
-    expect(screen.getByRole('link', { name: 'Department complaints' })).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Department overview' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Complaints' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Overview' })).toBeInTheDocument();
   });
 
   it('allows an authenticated user to open the notifications contract state', async () => {
@@ -158,8 +159,9 @@ describe('protected route behavior', () => {
       departmentMemberships: [{ departmentId: 'roads', departmentName: 'Roads and Public Works', role: 'manager' }],
     }));
 
-    await waitFor(() => expect(screen.getByRole('heading', { name: 'Manager review' })).toBeInTheDocument());
-    expect(screen.getByText('Manager review queue is not available yet')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'Complaint review' })).toBeInTheDocument());
+    // The mock adapter has no review queue; the page says the backend is needed instead of inventing data.
+    expect(await screen.findByText(/needs the CivicFix backend/)).toBeInTheDocument();
   });
 
   it('allows only a platform administrator to open the protected platform overview', async () => {
