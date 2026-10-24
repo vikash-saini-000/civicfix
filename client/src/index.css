@@ -1,0 +1,104 @@
+@import 'tailwindcss';
+@import 'leaflet/dist/leaflet.css';
+
+/*
+  CivicFix design tokens.
+  Adapted from the IBM / Carbon reference in awesome-design-md (design-md/ibm/DESIGN.md):
+  white canvas, charcoal ink, one blue accent, square corners, 1px hairlines, 4px spacing grid.
+  CivicFix changes: regular-weight headings (app, not marketing), dark text on yellow,
+  civic status/priority colours, and a light shadow only for floating layers.
+*/
+@theme {
+  --font-sans: 'IBM Plex Sans', 'Helvetica Neue', Arial, sans-serif;
+  --font-mono: 'IBM Plex Mono', Menlo, Consolas, monospace;
+
+  /* Base */
+  --color-primary: #0f62fe;
+  --color-primary-hover: #0050e6;
+  --color-primary-active: #002d9c;
+  --color-on-primary: #ffffff;
+  --color-ink: #161616;
+  --color-ink-muted: #525252;
+  --color-ink-subtle: #6f6f6f;
+  --color-canvas: #ffffff;
+  --color-surface-1: #f4f4f4;
+  --color-surface-2: #e0e0e0;
+  --color-surface-hover: #e8e8e8;
+  --color-hairline: #e0e0e0;
+  --color-field-rule: #8d8d8d;
+  --color-hairline-strong: #161616;
+  --color-inverse: #161616;
+  --color-link: #0f62fe;
+
+  /* Semantic */
+  --color-success: #24a148;
+  --color-warning: #f1c21b;
+  --color-caution: #ff832b;
+  --color-error: #da1e28;
+  --color-info: #0043ce;
+
+  /* Tag fills (light background + dark text, all >= 4.5:1) */
+  --color-tag-gray-bg: #e0e0e0;
+  --color-tag-gray-fg: #161616;
+  --color-tag-blue-bg: #d0e2ff;
+  --color-tag-blue-fg: #0043ce;
+  --color-tag-cyan-bg: #bae6ff;
+  --color-tag-cyan-fg: #00539a;
+  --color-tag-purple-bg: #e8daff;
+  --color-tag-purple-fg: #6929c4;
+  --color-tag-green-bg: #a7f0ba;
+  --color-tag-green-fg: #0e6027;
+  --color-tag-yellow-bg: #fcf4d6;
+  --color-tag-yellow-fg: #483700;
+  --color-tag-red-bg: #ffd7d9;
+  --color-tag-red-fg: #a2191f;
+
+  /* Floating layers only (map popups, menus). Cards stay flat. */
+  --shadow-float: 0 2px 6px rgb(0 0 0 / 0.2);
+
+  --breakpoint-md: 42rem; /* 672px */
+  --breakpoint-lg: 66rem; /* 1056px */
+}
+
+@layer base {
+  html {
+    color-scheme: light;
+  }
+  body {
+    @apply bg-canvas text-ink font-sans antialiased;
+    font-size: 1rem;
+    line-height: 1.5;
+    letter-spacing: 0.01em;
+  }
+  h1,
+  h2,
+  h3 {
+    font-weight: 400;
+    letter-spacing: 0;
+  }
+  a {
+    color: var(--color-link);
+  }
+  /* Carbon-style focus: 2px blue, always visible for keyboard users */
+  :focus-visible {
+    outline: 2px solid var(--color-primary);
+    outline-offset: -2px;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      transition-duration: 0.01ms !important;
+      animation-duration: 0.01ms !important;
+    }
+  }
+}
+
+/* Keep Leaflet below the sticky header and in the flat style */
+.leaflet-container {
+  font-family: var(--font-sans);
+  z-index: 0;
+}
+.leaflet-bar a {
+  border-radius: 0 !important;
+}

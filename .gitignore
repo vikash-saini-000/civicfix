@@ -1,6 +1,7 @@
 # Dependencies
 node_modules/
-
+/frontendPhasesPrompt/
+/backendPhasesPrompt/
 # Builds
 dist/
 build/
