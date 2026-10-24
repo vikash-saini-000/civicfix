@@ -1,10 +1,11 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { Suspense, useEffect, useState, type ReactNode } from 'react';
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router';
 import { API_MODE, AUTH_MODE, USING_MOCK_API } from '../api';
 import { ROLE_LABELS, navigationForRole, type NavigationItem } from '../auth/navigation';
 import { useAuth } from '../auth/AuthContext';
 import { Badge } from './Badge';
 import { Button } from './Button';
+import { LoadingIndicator } from './Feedback';
 import { Notification } from './Notification';
 import { PageMeta } from './PageMeta';
 import { cx } from '../lib/cx';
@@ -135,7 +136,9 @@ export function Layout() {
       )}
 
       <main id="main" className="flex-1">
-        <Outlet />
+        <Suspense fallback={<RouteLoading />}>
+          <Outlet />
+        </Suspense>
       </main>
       <footer className="bg-inverse text-[0.75rem] text-[#c6c6c6]">
         <div className="mx-auto max-w-[66rem] px-4 py-6">CivicFix · Team BitBros, NITK Surathkal · ChronoForge 2026</div>
@@ -202,5 +205,13 @@ export function PageHeader({
         {actions}
       </div>
     </>
+  );
+}
+
+function RouteLoading() {
+  return (
+    <Page title="Loading CivicFix">
+      <LoadingIndicator label="Loading this CivicFix workspace" />
+    </Page>
   );
 }

@@ -158,11 +158,11 @@ const UNKNOWN_STATUS_META: StatusMeta = {
 };
 
 export function getStatusMeta(status: string): StatusMeta {
-  return STATUS_META[status as KnownComplaintStatus] ?? UNKNOWN_STATUS_META;
+  return hasOwn(STATUS_META, status) ? STATUS_META[status as KnownComplaintStatus] : UNKNOWN_STATUS_META;
 }
 
 export function isKnownComplaintStatus(status: string): status is KnownComplaintStatus {
-  return status in STATUS_META;
+  return hasOwn(STATUS_META, status);
 }
 
 export const PRIORITY_META: Record<Priority, { label: string; description: string }> = {
@@ -177,18 +177,24 @@ const UNKNOWN_PRIORITY_META = {
   description: 'The complaint has a priority value that is not described in this version of CivicFix.',
 };
 
+const DATE_TIME_FORMATTER = new Intl.DateTimeFormat('en-IN', {
+  day: 'numeric',
+  month: 'short',
+  year: 'numeric',
+  hour: 'numeric',
+  minute: '2-digit',
+});
+
 export function getPriorityMeta(priority: string): { label: string; description: string } {
-  return PRIORITY_META[priority as Priority] ?? UNKNOWN_PRIORITY_META;
+  return hasOwn(PRIORITY_META, priority) ? PRIORITY_META[priority as Priority] : UNKNOWN_PRIORITY_META;
 }
 
 export function formatDateTime(iso: string | null | undefined): string {
   const date = iso ? new Date(iso) : null;
   if (!date || Number.isNaN(date.getTime())) return 'Date unavailable';
-  return new Intl.DateTimeFormat('en-IN', {
-    day: 'numeric',
-    month: 'short',
-    year: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-  }).format(date);
+  return DATE_TIME_FORMATTER.format(date);
+}
+
+function hasOwn<T extends object>(record: T, key: PropertyKey): key is keyof T {
+  return Object.prototype.hasOwnProperty.call(record, key);
 }

@@ -31,7 +31,9 @@ export function PriorityBadge({ priority }: { priority: ComplaintPriority | null
     return <span className={cx(tagBase, 'border border-hairline text-ink-muted')}>Priority pending</span>;
   }
   const meta = getPriorityMeta(priority);
-  const className = priority in priorityClass ? priorityClass[priority as keyof typeof priorityClass] : 'bg-tag-gray-bg text-ink';
+  const className = Object.prototype.hasOwnProperty.call(priorityClass, priority)
+    ? priorityClass[priority as keyof typeof priorityClass]
+    : 'bg-tag-gray-bg text-ink';
   return (
     <span className={cx(tagBase, 'font-semibold', className)} title={meta.description}>
       {meta.label}

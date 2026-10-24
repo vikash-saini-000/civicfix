@@ -1,19 +1,39 @@
+import { lazy, type ReactNode } from 'react';
 import { Link, Route, Routes } from 'react-router';
-import type { ReactNode } from 'react';
 import type { Role } from '../api/authTypes';
 import { PublicOnlyRoute, RequireAuth, RequireDepartmentMembership, RequireRole } from '../auth/RouteGuards';
 import { Layout, Page } from '../components/Layout';
-import { ComplaintDetailPage } from '../pages/ComplaintDetailPage';
-import { ComplaintsPage } from '../pages/ComplaintsPage';
-import { DashboardPage } from '../pages/DashboardPage';
-import { DepartmentComplaintDetailPage } from '../pages/DepartmentComplaintDetailPage';
-import { DepartmentComplaintsPage } from '../pages/DepartmentComplaintsPage';
-import { DepartmentWorkspacePage } from '../pages/DepartmentWorkspacePage';
 import { HomePage } from '../pages/HomePage';
-import { LoginPage, RegisterPage, RolePlaceholderPage } from '../pages/PlaceholderPages';
-import { ReportPage } from '../pages/ReportPage';
-import { ManagerReviewDetailPage, ManagerReviewPage } from '../pages/ManagerReviewPage';
-import { NotificationsPage } from '../pages/NotificationsPage';
+
+const ComplaintDetailPage = lazy(() =>
+  import('../pages/ComplaintDetailPage').then(({ ComplaintDetailPage: Component }) => ({ default: Component })),
+);
+const ComplaintsPage = lazy(() => import('../pages/ComplaintsPage').then(({ ComplaintsPage: Component }) => ({ default: Component })));
+const DashboardPage = lazy(() => import('../pages/DashboardPage').then(({ DashboardPage: Component }) => ({ default: Component })));
+const DepartmentComplaintDetailPage = lazy(() =>
+  import('../pages/DepartmentComplaintDetailPage').then(({ DepartmentComplaintDetailPage: Component }) => ({ default: Component })),
+);
+const DepartmentComplaintsPage = lazy(() =>
+  import('../pages/DepartmentComplaintsPage').then(({ DepartmentComplaintsPage: Component }) => ({ default: Component })),
+);
+const DepartmentWorkspacePage = lazy(() =>
+  import('../pages/DepartmentWorkspacePage').then(({ DepartmentWorkspacePage: Component }) => ({ default: Component })),
+);
+const LoginPage = lazy(() => import('../pages/PlaceholderPages').then(({ LoginPage: Component }) => ({ default: Component })));
+const RegisterPage = lazy(() => import('../pages/PlaceholderPages').then(({ RegisterPage: Component }) => ({ default: Component })));
+const RolePlaceholderPage = lazy(() =>
+  import('../pages/PlaceholderPages').then(({ RolePlaceholderPage: Component }) => ({ default: Component })),
+);
+const ReportPage = lazy(() => import('../pages/ReportPage').then(({ ReportPage: Component }) => ({ default: Component })));
+const ManagerReviewDetailPage = lazy(() =>
+  import('../pages/ManagerReviewPage').then(({ ManagerReviewDetailPage: Component }) => ({ default: Component })),
+);
+const ManagerReviewPage = lazy(() =>
+  import('../pages/ManagerReviewPage').then(({ ManagerReviewPage: Component }) => ({ default: Component })),
+);
+const NotificationsPage = lazy(() =>
+  import('../pages/NotificationsPage').then(({ NotificationsPage: Component }) => ({ default: Component })),
+);
 
 export function AppRoutes() {
   return (
