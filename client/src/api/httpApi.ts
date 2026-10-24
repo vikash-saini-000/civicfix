@@ -1,4 +1,5 @@
 import type { Complaint, NewComplaintInput } from '../lib/domain';
+import { captureHeaders } from '../lib/captureStamp';
 import type { DepartmentContext } from '../auth/department';
 import type { AuthSession, AuthUser, LoginCredentials, RegisterInput } from './authTypes';
 import { mapBackendUser, membershipDepartmentIds } from './backendUser';
@@ -10,6 +11,9 @@ import type {
   AssignComplaintInput,
   ClassifyComplaintInput,
   ComplaintAnalysis,
+  CapturePolicy,
+  CaptureSession,
+  LocationDescription,
   Department,
   DepartmentMember,
   DisputeInput,
@@ -26,6 +30,9 @@ import type {
 } from './operationsTypes';
 import type { CivicFixApi, PlatformComplaint, StaffComplaint } from './types';
 
+/** Uploads and pre-checks include the server's AI/ffmpeg checks, which can take a while (videos especially). */
+const UPLOAD_TIMEOUT_MS = 180_000;
+
 export interface HttpApiOptions {
   baseUrl: string;
   timeoutMs: number;
@@ -37,6 +44,10 @@ interface RequestOptions {
   /** JSON body (object) or raw upload body (Blob). */
   body?: object | Blob;
   contentType?: string;
+  /** Extra request headers (e.g. the in-app camera stamp). */
+  headers?: Record<string, string>;
+  /** Overrides the default request timeout (uploads and AI checks take longer). */
+  timeoutMs?: number;
   query?: Record<string, string | number | boolean | undefined>;
   signal?: AbortSignal;
   /** Send the bearer token and refresh it on 401. Default true. */
@@ -228,6 +239,8 @@ export class HttpCivicFixApi implements CivicFixApi {
       method: 'POST',
       body: file,
       contentType: file.type || 'application/octet-stream',
+      headers: captureHeaders(file),
+      timeoutMs: UPLOAD_TIMEOUT_MS,
       signal,
     });
     return { allowed: data?.allowed !== false, message: typeof data?.message === 'string' ? data.message : null };
@@ -238,10 +251,24 @@ export class HttpCivicFixApi implements CivicFixApi {
       method: 'POST',
       body: file,
       contentType: file.type || 'application/octet-stream',
+      headers: captureHeaders(file),
+      timeoutMs: UPLOAD_TIMEOUT_MS,
       query: { purpose, caption: caption || undefined },
       signal,
     });
     return data.evidence;
+  }
+
+  async describeLocation(lat: number, lng: number, signal?: AbortSignal): Promise<LocationDescription> {
+    return this.data<LocationDescription>('/geo/reverse', { query: { lat: lat.toFixed(6), lng: lng.toFixed(6) }, signal, timeoutMs: 15_000 });
+  }
+
+  async getCapturePolicy(signal?: AbortSignal): Promise<CapturePolicy> {
+    return this.data<CapturePolicy>('/evidence/capture-policy', { signal });
+  }
+
+  async startCaptureSession(signal?: AbortSignal): Promise<CaptureSession> {
+    return this.data<CaptureSession>('/evidence/capture-sessions', { method: 'POST', signal });
   }
 
   async fetchEvidenceContent(evidenceId: string, signal?: AbortSignal): Promise<Blob> {
@@ -405,11 +432,12 @@ export class HttpCivicFixApi implements CivicFixApi {
     }
 
     const controller = new AbortController();
-    const timeout = window.setTimeout(() => controller.abort(), this.options.timeoutMs);
+    const timeout = window.setTimeout(() => controller.abort(), options.timeoutMs ?? this.options.timeoutMs);
     const signal = mergeSignals(options.signal, controller.signal);
     const headers = new Headers({ Accept: 'application/json' });
     if ((useAuth || options.bearerOptional) && this.accessToken) headers.set('Authorization', `Bearer ${this.accessToken}`);
     if (options.csrf) headers.set('X-Requested-With', 'civicfix');
+    for (const [name, value] of Object.entries(options.headers ?? {})) headers.set(name, value);
 
     let body: BodyInit | undefined;
     if (options.body instanceof Blob) {

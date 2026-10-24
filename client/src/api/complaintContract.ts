@@ -30,6 +30,7 @@ export function parseComplaint(value: unknown): Complaint {
     description,
     location,
     ...(optionalString(record.landmark) ? { landmark: optionalString(record.landmark) } : {}),
+    ...(optionalString(record.address) ? { address: optionalString(record.address) } : {}),
     selectedCategory: parseCategory(record.selectedCategory),
     confirmedCategory: parseCategory(record.confirmedCategory),
     status,

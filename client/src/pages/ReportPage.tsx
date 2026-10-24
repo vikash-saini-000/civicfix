@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { useNavigate } from 'react-router';
 import { api } from '../api';
 import { ApiError } from '../api/errors';
+import type { LocationDescription } from '../api/operationsTypes';
 import type { ComplaintApi } from '../api/types';
 import { Button } from '../components/Button';
 import { Card } from '../components/Card';
@@ -31,6 +32,7 @@ export function ReportPage({ complaintApi = api }: ReportPageProps) {
   const [category, setCategory] = useState<CategoryId | ''>('');
   const [landmark, setLandmark] = useState('');
   const [location, setLocation] = useState<GeoPoint | null>(null);
+  const [locationWords, setLocationWords] = useState<LocationDescription | null>(null);
   const [photos, setPhotos] = useState<File[]>([]);
   const [errors, setErrors] = useState<Errors>({});
   const [submitting, setSubmitting] = useState(false);
@@ -214,6 +216,7 @@ export function ReportPage({ complaintApi = api }: ReportPageProps) {
                       setLocation(point);
                       updateFieldError('location');
                     }}
+                    onDescribed={setLocationWords}
                     error={errors.location}
                   />
                 </fieldset>
@@ -263,7 +266,11 @@ export function ReportPage({ complaintApi = api }: ReportPageProps) {
                   <dt className="text-ink-muted">Title</dt><dd>{title.trim()}</dd>
                   <dt className="text-ink-muted">Description</dt><dd className="whitespace-pre-line">{description.trim()}</dd>
                   <dt className="text-ink-muted">Category</dt><dd>{category ? CATEGORIES.find((item) => item.id === category)?.label : 'Not chosen'}</dd>
-                  <dt className="text-ink-muted">Location</dt><dd className="font-mono">{location?.lat.toFixed(5)}, {location?.lng.toFixed(5)}</dd>
+                  <dt className="text-ink-muted">Location</dt>
+                  <dd>
+                    {locationWords?.address && <span className="block">{locationWords.address}</span>}
+                    <span className="font-mono text-ink-muted">{location?.lat.toFixed(5)}, {location?.lng.toFixed(5)}</span>
+                  </dd>
                   {landmark.trim() && <><dt className="text-ink-muted">Landmark</dt><dd>{landmark.trim()}</dd></>}
                   <dt className="text-ink-muted">Photos</dt><dd>{photos.length || 'None'}</dd>
                 </dl>

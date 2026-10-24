@@ -47,11 +47,24 @@ await fetch(`${API}/complaints/${id}/evidence?purpose=ADDITIONAL`, {
 | `RESOLUTION` | assignee | work order `IN_PROGRESS`, `VERIFICATION_REQUIRED` |
 | `DISPUTE` | reporter | for their own open dispute |
 
-**File rules:** JPEG, PNG, WebP up to 10 MB; MP4 up to 50 MB.
-- The type is checked from the file's **actual bytes** and must match `Content-Type`. Client file names and declared types are never trusted.
+**File rules:** JPEG, PNG, WebP up to 10 MB; MP4 and MOV up to 50 MB and `MAX_VIDEO_SECONDS` (default 60). WebM (browser recordings) is accepted and converted to MP4 with ffmpeg before anything else.
+- The type is checked from the file's **actual bytes** and must match `Content-Type` (MP4 and MOV labels are interchangeable). Client file names and declared types are never trusted.
 - At most 30 files per complaint, and 60 uploads per user per hour.
 
-Errors: `415` (wrong or mismatched type, empty body), `413` (too large), `403` / `404` / `409` (rules above), `503` (storage off).
+**In-app camera stamp** (required when `EVIDENCE_CAPTURE=camera`, the default):
+
+| Header | Value |
+|---|---|
+| `X-Capture-Token` | Token from `POST /api/v1/evidence/capture-sessions` (same user, not expired) |
+| `X-Captured-At` | ISO time on the device when the photo was taken / recording started; must fall inside the session |
+| `X-Capture-Lat`, `X-Capture-Lng` | Optional GPS at capture time |
+| `X-Capture-Accuracy` | Optional GPS accuracy in metres; fixes worse than 500 m are ignored |
+
+The stamp's time and GPS become the evidence's `capturedAt` / capture location (used by the 50 m and timing checks), and the evidence gets `captureMethod: "IN_APP_CAMERA"`. Without a stamp (only allowed with `EVIDENCE_CAPTURE=any`) it is `FILE_UPLOAD` and time/GPS come from the file's EXIF or video tags.
+
+**Authenticity check before storing:** see [AI_ANALYSIS_PIPELINE.md](../ai/AI_ANALYSIS_PIPELINE.md). With `MEDIA_UPLOAD_GATE=block` (default) files flagged as AI-generated or edited are refused; `strict` also refuses files with only some signs of editing; `flag` stores everything and marks it for review. Refusals are audited as `evidence.rejected`; the message to the uploader is deliberately general.
+
+Errors: `415` (wrong or mismatched type, unreadable video, empty body), `413` (too large or too long), `422 CAPTURE_REQUIRED` (no or invalid camera stamp), `422 MEDIA_REJECTED` (looks AI-generated or edited; nothing stored), `403` / `404` / `409` (rules above), `503` (storage off, or video tools temporarily failing).
 
 `201` and `Location: /api/v1/evidence/<id>/content`:
 
@@ -60,11 +73,24 @@ Errors: `415` (wrong or mismatched type, empty body), `413` (too large), `403` /
   "id": "6adc…", "purpose": "RESOLUTION", "mediaType": "IMAGE", "contentType": "image/jpeg", "sizeBytes": 482113,
   "sha256": "9f2c…", "caption": "After repair", "uploadedBy": { "id": "…", "isReporter": false },
   "workOrderId": "…", "disputeId": null, "createdAt": "…", "contentUrl": "/api/v1/evidence/6adc…/content",
-  "authenticity": "ANALYSIS_PENDING"
+  "durationSec": null, "captureMethod": "IN_APP_CAMERA",
+  "authenticity": "NO_SUSPICIOUS_SIGNALS_DETECTED"
 } } }
 ```
 
-Each upload queues a **photo authenticity check** in the background (see [AI_ANALYSIS_PIPELINE.md](../ai/AI_ANALYSIS_PIPELINE.md)). `authenticity` is shown to staff and admins only, never to citizens.
+`authenticity` is the result of the upload-time check, shown to staff and admins only, never to citizens. Each upload also queues the shareable privacy copy and, for `RESOLUTION` files, the before/after comparison.
+
+### POST /api/v1/evidence/check
+
+Same body and headers as an upload, without a complaint: used by the report form to refuse a file **before** the complaint is created. Stores nothing. `200 { "allowed": true, "message": null }` or `200 { "allowed": false, "message": "…" }`. The result is cached by file hash, so the real upload doesn't repeat the AI call.
+
+### GET /api/v1/evidence/capture-policy
+
+`{ "captureMode": "camera" | "any", "maxVideoSeconds": 60, "cameraSessions": true }`. Any signed-in user.
+
+### POST /api/v1/evidence/capture-sessions
+
+No body. `201 { "token": "…", "expiresAt": "…", "captureMode": "camera", "maxVideoSeconds": 60 }`. Call it when the camera opens; every capture in that session is uploaded with the token. Rate-limited like uploads.
 
 ### GET /api/v1/complaints/:publicId/evidence
 
@@ -165,11 +191,12 @@ While a dispute is `OPEN` or `UNDER_REVIEW`, the complaint **cannot be closed**.
 
 ## 5. Audit
 
-`evidence.uploaded`, `evidence.downloaded`, `work_order.submit_resolution`, `work_order.require_verification`, `work_order.approve`, `work_order.reject_resolution`, `work_order.reopen`, `dispute.created`, `dispute.review_started`, `dispute.decided`, `dispute.withdrawn`, `complaint.closed`, `feedback.created`.
+`evidence.uploaded`, `evidence.rejected`, `evidence.downloaded`, `work_order.submit_resolution`, `work_order.require_verification`, `work_order.approve`, `work_order.reject_resolution`, `work_order.reopen`, `dispute.created`, `dispute.review_started`, `dispute.decided`, `dispute.withdrawn`, `complaint.closed`, `feedback.created`.
 
 ## 6. Limitations and decisions needed
 
 - **Storage:** only local disk. Production needs a cloud provider implementation and backups. There's no virus scanning; files are never executed or transformed. If storing the database record fails after the file was written, the file is deleted.
 - **Needs product-owner approval:** auto-approval (off by default), the 14-day dispute window, and the minimum evidence count.
-- **Video:** frames aren't analysed (authenticity of videos is always `INCONCLUSIVE`).
+- **Video:** needs ffmpeg. The authenticity check looks at 4 frames; the privacy blur samples frames about every 2 s (up to 12), so a face that appears only between samples can be missed. Without ffmpeg, videos get metadata checks only.
+- **Camera stamp:** raises the bar (old or downloaded files can't be passed off as taken now in the app) but it is not proof; a determined person can script the API. The AI check runs regardless.
 - **Same-person review:** the reviewer of a dispute may be the same manager who approved the resolution. There's no separation-of-duties rule yet.

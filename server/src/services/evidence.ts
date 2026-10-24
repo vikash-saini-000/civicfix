@@ -4,13 +4,14 @@ import type { Principal } from '../auth/roles.js';
 import type { EvidencePurpose } from '../models/enums.js';
 import { AIAnalysis, Complaint, Dispute, Evidence, WorkOrder } from '../models/index.js';
 import { DEFAULT_MAX_VIDEO_SECONDS, MAX_IMAGE_BYTES, MAX_VIDEO_BYTES } from '../models/Evidence.js';
-import { disabledVideoTools, VideoProcessingError, type VideoProbe, type VideoTools } from '../media/video.js';
+import { disabledVideoTools, isWebm, VideoProcessingError, type VideoProbe, type VideoTools } from '../media/video.js';
 import type { ObjectStorage } from '../storage/index.js';
 import { AppError, notFoundError, validationError } from '../utils/errors.js';
 import { readCaptureMetadata } from './analysis/exif.js';
 import type { ScreenResult } from './analysis/index.js';
 import { isVideoType, sniffMediaType, typesMatch, type AuthenticityResult } from './analysis/mediaAuthenticity.js';
 import { auditUserAction } from './audit.js';
+import type { CaptureSessions, CaptureStamp, CaptureStampInput } from './captureSessions.js';
 import { relationTo, type ComplaintService } from './complaints.js';
 import { rolesOn } from './workOrders.js';
 
@@ -26,7 +27,11 @@ export interface UploadInput {
   declaredType: string;
   caption?: string;
   disputeId?: string;
+  /** In-app camera stamp (X-Capture-* headers). */
+  capture?: CaptureStampInput;
 }
+
+export type CaptureMode = 'camera' | 'any';
 
 export interface EvidenceServiceDeps {
   storage: ObjectStorage;
@@ -40,6 +45,9 @@ export interface EvidenceServiceDeps {
   video?: VideoTools;
   /** Longest accepted video, in seconds. */
   maxVideoSeconds?: number;
+  /** camera = files must carry a valid in-app camera stamp; any (default) = gallery files allowed too. */
+  captureMode?: CaptureMode;
+  captureSessions?: CaptureSessions;
 }
 
 type EvidenceDoc = Record<string, any> & { _id: Types.ObjectId; complaint: Types.ObjectId; purpose: EvidencePurpose };
@@ -57,10 +65,37 @@ function checkFile(bytes: Buffer, declaredType: string) {
   return sniffed;
 }
 
+export const CAPTURE_REQUIRED_MESSAGE = 'Take the photo or video with the camera in the CivicFix app. Files from the gallery are not accepted.';
+
 export function createEvidenceService(deps: EvidenceServiceDeps) {
   const { storage } = deps;
   const video = deps.video ?? disabledVideoTools;
   const maxVideoSeconds = deps.maxVideoSeconds ?? DEFAULT_MAX_VIDEO_SECONDS;
+  const captureMode: CaptureMode = deps.captureMode ?? 'any';
+
+  /**
+   * Browsers record video as WebM on Chrome/Firefox. It's converted to MP4 here (needs ffmpeg) so the
+   * rest of the pipeline, storage and playback only deal with MP4/MOV.
+   */
+  async function normalize(bytes: Buffer, declaredType: string): Promise<{ bytes: Buffer; declaredType: string }> {
+    if (!isWebm(bytes)) return { bytes, declaredType };
+    if (declaredType !== 'video/webm') throw new AppError('UNSUPPORTED_MEDIA_TYPE', 'The file content does not match its type.');
+    if (bytes.length > MAX_VIDEO_BYTES) throw new AppError('PAYLOAD_TOO_LARGE', `Files must be at most ${MAX_VIDEO_BYTES / 1024 / 1024} MB.`);
+    if (!video.enabled) throw new AppError('UNSUPPORTED_MEDIA_TYPE', 'WebM videos are not supported on this server. Record an MP4 or MOV video instead.');
+    try {
+      return { bytes: await video.toMp4(bytes), declaredType: 'video/mp4' };
+    } catch (err) {
+      if (err instanceof VideoProcessingError && err.kind === 'UNREADABLE') throw new AppError('UNSUPPORTED_MEDIA_TYPE', 'The video could not be read. Please record it again.');
+      throw new AppError('SERVICE_UNAVAILABLE', 'Videos cannot be processed right now. Please try again shortly or take a photo.');
+    }
+  }
+
+  /** The verified camera stamp, or null for a plain file. In camera mode a valid stamp is required. */
+  function captureStamp(p: Principal, input?: CaptureStampInput): CaptureStamp | null {
+    const stamp = deps.captureSessions && input?.token ? deps.captureSessions.verify(p.userId, input) : null;
+    if (!stamp && captureMode === 'camera') throw new AppError('CAPTURE_REQUIRED', CAPTURE_REQUIRED_MESSAGE);
+    return stamp;
+  }
 
   /** Videos must be readable and short enough. Returns their details, or undefined without ffmpeg. */
   async function checkVideo(bytes: Buffer, mediaType: string): Promise<VideoProbe | undefined> {
@@ -124,6 +159,7 @@ export function createEvidenceService(deps: EvidenceServiceDeps) {
       sizeBytes: e.sizeBytes,
       sha256: e.sha256 ?? null,
       durationSec: e.durationSec ?? null,
+      captureMethod: e.captureMethod ?? 'FILE_UPLOAD',
       caption: e.notes ?? null,
       // Staff never get the reporter's account ID (reporter identity is hidden from departments).
       uploadedBy: { id: viewerIsStaff && e._reporter === true ? null : String(e.uploadedBy), isReporter: e._reporter === true },
@@ -155,6 +191,8 @@ export function createEvidenceService(deps: EvidenceServiceDeps) {
       const complaint = await Complaint.findById(complaintId).select('citizen status title description').lean();
       if (!complaint) throw notFoundError('The complaint');
       const links = await authorizeUpload(p, complaint, relation, input);
+      const stamp = captureStamp(p, input.capture);
+      input = { ...input, ...(await normalize(input.bytes, input.declaredType)) };
 
       const sniffed = checkFile(input.bytes, input.declaredType);
       if ((await Evidence.countDocuments({ complaint: complaintId })) >= MAX_EVIDENCE_PER_COMPLAINT) {
@@ -181,8 +219,10 @@ export function createEvidenceService(deps: EvidenceServiceDeps) {
         screened = s.result;
       }
 
-      // Capture time and GPS from the file itself (JPEG EXIF, phone video tags). Hints for verification, never proof.
-      const capture = sniffed === 'image/jpeg' ? readCaptureMetadata(input.bytes) : probe ? { capturedAt: probe.capturedAt, location: probe.location } : {};
+      // Capture time and GPS: from the in-app camera stamp when there is one (taken on the device at the
+      // moment of capture), otherwise from the file itself (JPEG EXIF, phone video tags). Hints, never proof.
+      const fromFile = sniffed === 'image/jpeg' ? readCaptureMetadata(input.bytes) : probe ? { capturedAt: probe.capturedAt, location: probe.location } : {};
+      const capture = stamp ? { capturedAt: stamp.capturedAt, location: stamp.location ?? fromFile.location } : fromFile;
 
       const id = new Types.ObjectId();
       const key = `evidence/${String(complaintId)}/${String(id)}-${randomUUID()}.${EXTENSIONS[sniffed]}`;
@@ -206,6 +246,8 @@ export function createEvidenceService(deps: EvidenceServiceDeps) {
           capturedAt: capture.capturedAt,
           captureLocation: capture.location ? { type: 'Point', coordinates: [capture.location.lng, capture.location.lat] } : undefined,
           durationSec: probe ? Math.round(probe.durationSec * 10) / 10 : undefined,
+          captureMethod: stamp ? 'IN_APP_CAMERA' : 'FILE_UPLOAD',
+          captureAccuracyM: stamp?.location ? stamp.accuracyM : undefined,
           // Shareable copy without metadata, with faces and number plates blurred (videos need ffmpeg).
           redaction: { state: isVideo && !video.enabled ? 'NOT_SUPPORTED' : 'PENDING', updatedAt: new Date() },
         });
@@ -223,7 +265,9 @@ export function createEvidenceService(deps: EvidenceServiceDeps) {
      * Checks a file before the complaint exists (report form), so a citizen learns about a rejected
      * photo before submitting. Stores nothing; the real upload repeats the check (cached, no extra AI call).
      */
-    async precheck(p: Principal, bytes: Buffer, declaredType: string, requestId: string) {
+    async precheck(p: Principal, rawBytes: Buffer, rawType: string, requestId: string, capture?: CaptureStampInput) {
+      captureStamp(p, capture);
+      const { bytes, declaredType } = await normalize(rawBytes, rawType);
       const sniffed = checkFile(bytes, declaredType);
       await checkVideo(bytes, sniffed);
       if (!deps.screenUpload) return { allowed: true, message: null };
@@ -232,6 +276,18 @@ export function createEvidenceService(deps: EvidenceServiceDeps) {
         await auditUserAction({ actor: p, action: 'evidence.rejected', targetType: 'User', targetId: p.userId, requestId, changes: [{ field: 'authenticity', after: s.result.outcome }] });
       }
       return { allowed: s.allowed, message: s.allowed ? null : MEDIA_REJECTED_MESSAGE };
+    },
+
+    /** Rules the app needs before opening the camera or file picker. */
+    capturePolicy() {
+      return { captureMode, maxVideoSeconds, cameraSessions: Boolean(deps.captureSessions) };
+    },
+
+    /** Opens an in-app camera session: a short-lived token the captured files are uploaded with. */
+    startCaptureSession(p: Principal) {
+      if (!deps.captureSessions) throw new AppError('SERVICE_UNAVAILABLE', 'In-app camera sessions are not configured on this server.');
+      const s = deps.captureSessions.start(p.userId);
+      return { token: s.token, expiresAt: s.expiresAt.toISOString(), captureMode, maxVideoSeconds };
     },
 
     /** Metadata for a complaint's evidence. Reporter, staff of its department and admins only. */

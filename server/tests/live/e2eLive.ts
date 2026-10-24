@@ -26,8 +26,8 @@ const AI_WAIT_MS = 180_000;
 
 // ---- tiny HTTP client --------------------------------------------------------------------------
 type Res = { status: number; body: any };
-async function call(method: string, path: string, token?: string, body?: unknown, raw?: { type: string; data: Buffer }): Promise<Res> {
-  const headers: Record<string, string> = {};
+async function call(method: string, path: string, token?: string, body?: unknown, raw?: { type: string; data: Buffer; headers?: Record<string, string> }): Promise<Res> {
+  const headers: Record<string, string> = { ...raw?.headers };
   if (token) headers.Authorization = `Bearer ${token}`;
   let payload: BodyInit | undefined;
   if (raw) {
@@ -83,8 +83,21 @@ function photo(file: string): Buffer {
   const app1 = exifSource.subarray(2, 4 + exifSource.readUInt16BE(4));
   return Buffer.concat([jpeg.subarray(0, 2), app1, jpeg.subarray(2)]);
 }
-const upload = (publicId: string, token: string, purpose: string, file: string, extra = '') =>
-  call('POST', `/complaints/${publicId}/evidence?purpose=${purpose}${extra}`, token, undefined, { type: 'image/jpeg', data: photo(file) });
+/**
+ * Same stamp the app's camera adds (EVIDENCE_CAPTURE=camera): a camera-session token, the capture time
+ * and GPS at the site. One session per account, opened on first use.
+ */
+const sessions = new Map<string, string>();
+async function cameraStamp(token: string): Promise<Record<string, string>> {
+  if (!sessions.has(token)) {
+    const res = await call('POST', '/evidence/capture-sessions', token);
+    if (res.status !== 201) throw new Error(`Could not open a camera session: ${res.status} ${JSON.stringify(res.body).slice(0, 200)}`);
+    sessions.set(token, res.body.data.token);
+  }
+  return { 'X-Capture-Token': sessions.get(token)!, 'X-Captured-At': new Date().toISOString(), 'X-Capture-Lat': String(SITE.lat), 'X-Capture-Lng': String(SITE.lng), 'X-Capture-Accuracy': '8' };
+}
+const upload = async (publicId: string, token: string, purpose: string, file: string, extra = '') =>
+  call('POST', `/complaints/${publicId}/evidence?purpose=${purpose}${extra}`, token, undefined, { type: 'image/jpeg', data: photo(file), headers: await cameraStamp(token) });
 const fixture = (file: string) => readFileSync(new URL(`./fixtures/${file}`, import.meta.url));
 
 /** Waits until no AI job for the complaint is pending or running (staff view of the analysis). */
@@ -142,7 +155,13 @@ async function main() {
     'complaint created',
   )).complaint;
   console.log(`    ${complaint.publicId}`);
-  const drawn = await call('POST', `/complaints/${complaint.publicId}/evidence?purpose=COMPLAINT_REPORT`, citizen, undefined, { type: 'image/jpeg', data: fixture('pothole-before.jpg') });
+  const policy = (await ok(call('GET', '/evidence/capture-policy', citizen), 200, 'capture policy')) as { captureMode: string };
+  console.log(`    capture mode: ${policy.captureMode}`);
+  if (policy.captureMode === 'camera') {
+    const gallery = await call('POST', `/complaints/${complaint.publicId}/evidence?purpose=COMPLAINT_REPORT`, citizen, undefined, { type: 'image/jpeg', data: photo('pothole-before.jpg') });
+    check(gallery.status === 422 && gallery.body?.error?.code === 'CAPTURE_REQUIRED', 'gallery file (no camera stamp) refused', gallery.body);
+  }
+  const drawn = await call('POST', `/complaints/${complaint.publicId}/evidence?purpose=COMPLAINT_REPORT`, citizen, undefined, { type: 'image/jpeg', data: fixture('pothole-before.jpg'), headers: await cameraStamp(citizen) });
   check(drawn.status === 422 && drawn.body?.error?.code === 'MEDIA_REJECTED', 'drawn/AI-looking photo refused at upload', drawn.body);
   if (!REAL.before || !REAL.after) {
     console.log('\n  Set E2E_BEFORE_PHOTO and E2E_AFTER_PHOTO to real camera JPEGs to run the rest of the journey.');

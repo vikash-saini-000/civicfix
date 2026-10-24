@@ -170,6 +170,12 @@ export function ComplaintDetailPage({ complaintApi = api }: ComplaintDetailPageP
                 <dd>{complaint.landmark}</dd>
               </>
             )}
+            {complaint.address && (
+              <>
+                <dt className="text-ink-muted">Address</dt>
+                <dd>{complaint.address}</dd>
+              </>
+            )}
           </dl>
           <div>
             <h3 className="mb-2 text-[0.875rem] font-semibold">Description</h3>
@@ -180,7 +186,7 @@ export function ComplaintDetailPage({ complaintApi = api }: ComplaintDetailPageP
             <EvidencePanel
               publicId={complaint.publicId}
               uploadPurpose={['CLOSED', 'REJECTED'].includes(complaint.status) ? undefined : 'ADDITIONAL'}
-              uploadLabel="Add another photo or video"
+              uploadLabel="Take another photo or video"
             />
           )}
           <ButtonLink to="/citizen/complaints" variant="ghost" className="self-start -ml-4">

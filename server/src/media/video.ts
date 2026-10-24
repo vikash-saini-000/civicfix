@@ -44,6 +44,8 @@ export interface VideoTools {
   frames(bytes: Uint8Array, opts: { count?: number; atSec?: number[]; maxWidth?: number }): Promise<VideoFrame[]>;
   /** Shareable MP4: all metadata removed, the given regions pixelated. */
   redact(bytes: Uint8Array, regions: TimedRegion[]): Promise<Buffer>;
+  /** Re-encodes any readable video (e.g. a browser's WebM recording) as H.264/AAC MP4. */
+  toMp4(bytes: Uint8Array): Promise<Buffer>;
 }
 
 export class VideoProcessingError extends Error {
@@ -59,7 +61,7 @@ export class VideoProcessingError extends Error {
 const unavailable = async (): Promise<never> => {
   throw new VideoProcessingError('UNAVAILABLE', 'Video processing (ffmpeg) is not available.');
 };
-export const disabledVideoTools: VideoTools = { enabled: false, version: null, probe: unavailable, frames: unavailable, redact: unavailable };
+export const disabledVideoTools: VideoTools = { enabled: false, version: null, probe: unavailable, frames: unavailable, redact: unavailable, toMp4: unavailable };
 
 export interface VideoToolsConfig {
   ffmpegPath: string;
@@ -236,7 +238,23 @@ export function createFfmpegVideoTools(config: VideoToolsConfig, version: string
         );
         return readFile(out);
       }),
+
+    toMp4: (bytes) =>
+      withTempFile(bytes, async (dir, input) => {
+        const out = join(dir, 'converted.mp4');
+        await run(
+          config.ffmpegPath,
+          ['-v', 'error', '-nostdin', '-i', input, '-map', '0:v:0', '-map', '0:a:0?', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '23', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '128k', '-movflags', '+faststart', '-y', out],
+          timeoutMs * 2,
+        );
+        return readFile(out);
+      }),
   };
+}
+
+/** True for a WebM/Matroska file (EBML header), as recorded by Chrome/Firefox MediaRecorder. */
+export function isWebm(bytes: Uint8Array): boolean {
+  return bytes.length >= 4 && bytes[0] === 0x1a && bytes[1] === 0x45 && bytes[2] === 0xdf && bytes[3] === 0xa3;
 }
 
 /** Uses ffmpeg/ffprobe if both run; otherwise video processing is off and videos get metadata-only checks. */

@@ -49,7 +49,7 @@ export interface WorkOrderHistoryEntry {
 export interface WorkOrder {
   id: string;
   publicId: string;
-  complaint: { publicId: string; title: string; status: ComplaintStatus; landmark: string | null; location: { lat: number; lng: number } | null } | null;
+  complaint: { publicId: string; title: string; status: ComplaintStatus; landmark: string | null; address?: string | null; location: { lat: number; lng: number } | null } | null;
   department: DepartmentRef | null;
   priority: ComplaintPriority | null;
   status: WorkOrderStatus;
@@ -103,6 +103,30 @@ export type VerificationDecision = 'APPROVE' | 'REJECT' | 'REQUEST_EVIDENCE';
 
 export type EvidencePurpose = 'COMPLAINT_REPORT' | 'ADDITIONAL' | 'WORK_PROGRESS' | 'RESOLUTION' | 'DISPUTE';
 
+/** A map point in words (GET /api/v1/geo/reverse). */
+export interface LocationDescription {
+  address: string | null;
+  ward: { code: string; name: string } | null;
+  nearestPlace: { name: string; kind: string; distanceMeters: number } | null;
+  source: 'openstreetmap' | 'none';
+}
+
+/** Server rules for photos/videos (EVIDENCE_CAPTURE, MAX_VIDEO_SECONDS). */
+export interface CapturePolicy {
+  /** camera = files must be taken with the in-app camera; any = gallery files allowed too. */
+  captureMode: 'camera' | 'any';
+  maxVideoSeconds: number;
+  /** Whether the server issues camera-session tokens. */
+  cameraSessions: boolean;
+}
+
+export interface CaptureSession {
+  token: string;
+  expiresAt: string;
+  captureMode: 'camera' | 'any';
+  maxVideoSeconds: number;
+}
+
 export interface Evidence {
   id: string;
   purpose: EvidencePurpose | (string & {});
@@ -115,6 +139,9 @@ export interface Evidence {
   createdAt: string;
   /** Staff and admins only. */
   authenticity?: string;
+  /** IN_APP_CAMERA = taken with the app's camera (time/GPS stamped); FILE_UPLOAD = chosen from files. */
+  captureMethod?: 'IN_APP_CAMERA' | 'FILE_UPLOAD' | (string & {});
+  durationSec?: number | null;
 }
 
 export interface ReviewQueueItem {
@@ -240,6 +267,11 @@ export interface OperationsApi {
   listEvidence(publicId: string, signal?: AbortSignal): Promise<Evidence[]>;
   uploadEvidence(publicId: string, file: File, purpose: EvidencePurpose, caption?: string, signal?: AbortSignal): Promise<Evidence>;
   fetchEvidenceContent(evidenceId: string, signal?: AbortSignal): Promise<Blob>;
+  getCapturePolicy(signal?: AbortSignal): Promise<CapturePolicy>;
+  /** Street address, ward and nearest mapped place for a point. */
+  describeLocation(lat: number, lng: number, signal?: AbortSignal): Promise<LocationDescription>;
+  /** Opens an in-app camera session; captured files are uploaded with its token. */
+  startCaptureSession(signal?: AbortSignal): Promise<CaptureSession>;
 
   // Triage and routing
   getAnalysis(publicId: string, signal?: AbortSignal): Promise<ComplaintAnalysis>;

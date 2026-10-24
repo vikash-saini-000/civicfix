@@ -99,10 +99,11 @@ function build(
     comparison?: ComparisonScript;
     policy?: Partial<VerificationPolicy>;
     storage?: ObjectStorage;
-    mediaGate?: 'block' | 'flag';
+    mediaGate?: 'strict' | 'block' | 'flag';
     video?: VideoTools;
     maxVideoSeconds?: number;
     privacy?: PrivacyRegions;
+    capture?: { mode: 'camera' | 'any'; sessionTtlSeconds: number };
   } = {},
 ) {
   storage = opts.storage ?? createMemoryStorage();
@@ -123,6 +124,7 @@ function build(
     storage,
     video: opts.video,
     maxVideoSeconds: opts.maxVideoSeconds,
+    capture: opts.capture,
     verificationPolicy: { ...DEFAULT_VERIFICATION_POLICY, ...opts.policy },
   });
 }
@@ -451,6 +453,112 @@ describe.skipIf(!videoTools.enabled)('video evidence', { timeout: 120_000 }, () 
     const res = await request(app).post('/api/v1/evidence/check').set('Authorization', `Bearer ${alice.token}`).set('Content-Type', 'video/mp4').send(await clip());
     expect(res.status).toBe(200);
     expect(res.body.data).toEqual({ allowed: true, message: null });
+  });
+});
+
+// ---- in-app camera capture ---------------------------------------------------------------------------------
+describe('in-app camera capture', () => {
+  const camera = { mode: 'camera' as const, sessionTtlSeconds: 600 };
+  beforeEach(async () => {
+    build({ capture: camera });
+    await seed();
+  });
+
+  const openCamera = async (who: Actor) => {
+    const res = await request(app).post('/api/v1/evidence/capture-sessions').set('Authorization', `Bearer ${who.token}`);
+    expect(res.status).toBe(201);
+    return res.body.data.token as string;
+  };
+  const stamped = (publicId: string, who: Actor, purpose: string, token: string, extra: Record<string, string> = {}, bytes: Buffer = jpeg(), type = 'image/jpeg') =>
+    request(app)
+      .post(`/api/v1/complaints/${publicId}/evidence?purpose=${purpose}`)
+      .set('Authorization', `Bearer ${who.token}`)
+      .set('Content-Type', type)
+      .set('X-Capture-Token', token)
+      .set('X-Captured-At', extra.at ?? new Date().toISOString())
+      .set('X-Capture-Lat', extra.lat ?? String(site.lat))
+      .set('X-Capture-Lng', extra.lng ?? String(site.lng))
+      .set('X-Capture-Accuracy', extra.accuracy ?? '8')
+      .send(bytes);
+
+  it('tells the app that the camera is required', async () => {
+    const res = await request(app).get('/api/v1/evidence/capture-policy').set('Authorization', `Bearer ${alice.token}`);
+    expect(res.body.data).toMatchObject({ captureMode: 'camera', maxVideoSeconds: 60, cameraSessions: true });
+    expect((await request(app).post('/api/v1/evidence/capture-sessions')).status).toBe(401);
+  });
+
+  it('refuses gallery files and stale or foreign camera stamps, storing nothing', async () => {
+    const { c } = await inProgress();
+    const plain = await upload(c.publicId, alice, 'ADDITIONAL');
+    expect(plain.status).toBe(422);
+    expect(plain.body.error.code).toBe('CAPTURE_REQUIRED');
+    const token = await openCamera(alice);
+    const old = await stamped(c.publicId, alice, 'ADDITIONAL', token, { at: '2025-01-01T09:00:00Z' });
+    expect(old.status).toBe(422);
+    expect(old.body.error.message).toMatch(/outside the camera session/);
+    expect((await stamped(c.publicId, worker, 'RESOLUTION', token)).body.error.code).toBe('CAPTURE_REQUIRED'); // alice's token
+    const check = await request(app).post('/api/v1/evidence/check').set('Authorization', `Bearer ${alice.token}`).set('Content-Type', 'image/jpeg').send(jpeg());
+    expect(check.status).toBe(422);
+    expect(await Evidence.countDocuments()).toBe(0);
+  });
+
+  it('accepts camera captures and stores the time and GPS from the moment of capture', async () => {
+    const { c, wo } = await inProgress();
+    const takenAt = new Date(Date.now() - 5_000).toISOString();
+    const res = await stamped(c.publicId, worker, 'RESOLUTION', await openCamera(worker), { at: takenAt, accuracy: '6.7' });
+    expect(res.status).toBe(201);
+    expect(res.body.data.evidence.captureMethod).toBe('IN_APP_CAMERA');
+    const doc = (await Evidence.findById(res.body.data.evidence.id).lean())!;
+    expect(doc.capturedAt?.toISOString()).toBe(takenAt);
+    expect(doc.captureLocation?.coordinates).toEqual([site.lng, site.lat]);
+    expect(doc.captureAccuracyM).toBe(7);
+    // The stamp feeds the usual 50 m / timing checks: a clean in-app capture at the site is sufficient.
+    await settle();
+    const r = await call('post', `/work-orders/${wo}/resolution`, worker, { completionNotes: 'Filled and compacted the pothole with asphalt.', evidenceIds: [doc._id.toString()] });
+    expect(r.body.data.assessment.outcome).toBe('SUFFICIENT');
+  });
+
+  it('a camera capture far from the complaint is flagged by verification', async () => {
+    const { c, wo } = await inProgress();
+    const res = await stamped(c.publicId, worker, 'RESOLUTION', await openCamera(worker), { lat: String(site.lat + 0.05), lng: String(site.lng) });
+    await settle();
+    const r = await call('post', `/work-orders/${wo}/resolution`, worker, { completionNotes: 'Filled and compacted the pothole with asphalt.', evidenceIds: [res.body.data.evidence.id] });
+    expect(r.body.data.assessment.outcome).not.toBe('SUFFICIENT');
+  });
+
+  it('with EVIDENCE_CAPTURE=any, gallery files are accepted and marked as file uploads', async () => {
+    build({ capture: { mode: 'any', sessionTtlSeconds: 600 } });
+    const { c } = await inProgress();
+    const res = await upload(c.publicId, alice, 'ADDITIONAL');
+    expect(res.status).toBe(201);
+    expect(res.body.data.evidence.captureMethod).toBe('FILE_UPLOAD');
+  });
+
+  it('the strict gate also refuses files with only "some" signs of editing', async () => {
+    build({ capture: camera, mediaGate: 'strict', image: { ...clean, visualInconsistency: 'SOME', inconsistencyNotes: 'Slight cloning near the kerb.' } });
+    const { c } = await inProgress();
+    const res = await stamped(c.publicId, alice, 'ADDITIONAL', await openCamera(alice));
+    expect(res.status).toBe(422);
+    expect(res.body.error.code).toBe('MEDIA_REJECTED');
+    build({ capture: camera, mediaGate: 'block', image: { ...clean, visualInconsistency: 'SOME', inconsistencyNotes: 'Slight cloning near the kerb.' } });
+    expect((await stamped(c.publicId, alice, 'ADDITIONAL', await openCamera(alice))).status).toBe(201);
+  });
+
+  it.skipIf(!videoTools.enabled)('converts a browser WebM recording to MP4', { timeout: 120_000 }, async () => {
+    build({ capture: camera, video: videoTools, privacy: { regions: [] } });
+    const { c } = await inProgress();
+    const dir = await mkdtemp(join(tmpdir(), 'civicfix-webm-'));
+    try {
+      const out = join(dir, 'rec.webm');
+      await promisify(execFile)(process.env.FFMPEG_PATH ?? 'ffmpeg', ['-v', 'error', '-f', 'lavfi', '-i', 'testsrc2=size=320x240:rate=15:duration=2', '-c:v', 'libvpx-vp9', '-b:v', '300k', '-y', out]);
+      const res = await stamped(c.publicId, alice, 'ADDITIONAL', await openCamera(alice), {}, await readFile(out), 'video/webm');
+      expect(res.status).toBe(201);
+      expect(res.body.data.evidence).toMatchObject({ mediaType: 'VIDEO', contentType: 'video/mp4', captureMethod: 'IN_APP_CAMERA', durationSec: 2 });
+      // A WebM label on non-WebM bytes is refused.
+      expect((await stamped(c.publicId, alice, 'ADDITIONAL', await openCamera(alice), {}, jpeg(), 'video/webm')).status).toBe(415);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });
 

@@ -146,6 +146,7 @@ export function ManagerReviewDetailPage() {
               <dd>{c.reporterAlias ?? 'Hidden'}</dd>
               <dt className="text-ink-muted">Location</dt>
               <dd>
+                {c.address && <span className="block">{c.address}</span>}
                 <a href={`https://www.openstreetmap.org/?mlat=${c.location.lat}&mlon=${c.location.lng}#map=18/${c.location.lat}/${c.location.lng}`} target="_blank" rel="noreferrer">
                   {c.location.lat.toFixed(5)}, {c.location.lng.toFixed(5)}
                 </a>

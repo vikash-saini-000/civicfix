@@ -8,7 +8,7 @@ Stack: Node 22+ (ESM), TypeScript, Express 5, Mongoose 9, zod 4, pino, Vitest.
 
 ## Run locally
 
-Requires a running MongoDB (local 8.0 service is fine).
+Requires a MongoDB connection (Atlas or a local 8.0 service). For video evidence, **ffmpeg and ffprobe** must be installed (on the PATH, or set `FFMPEG_PATH` / `FFPROBE_PATH`); without them videos only get metadata checks and a warning is logged at startup.
 
 ```bash
 cd server
@@ -27,7 +27,8 @@ npm run dev               # tsx watch, http://localhost:4000
 | `npm run user:create` | Create an account outside public registration, e.g. the first `PLATFORM_ADMIN` (password from `NEW_USER_PASSWORD`) |
 | `npm run db:sync-indexes` | Create/update model indexes (needed in production, where auto-indexing is off). It also drops indexes no longer in the schemas. |
 | `npm run db:seed` | Local demo data (refused in production): `admin@civicfix.local`, `citizen@civicfix.local`, and one department per category with `<dept>.manager@`, `<dept>.worker1@`, `<dept>.worker2@civicfix.local`. All use `SEED_PASSWORD`. Safe to re-run. |
-| `npm run e2e:live` | Full journey (complaint → AI → assignment → work → verification → dispute → rework → close → feedback, plus notifications, dashboards, audit) over HTTP against the **running** server. Needs `db:seed`; reads `SEED_PASSWORD` from the env or `.seed-credentials`. Makes real AI calls when AI is on. |
+| `npm run e2e:live` | Full journey (complaint → AI → assignment → work → verification → dispute → rework → close → feedback, plus notifications, dashboards, audit) over HTTP against the **running** server. Needs `db:seed`; reads `SEED_PASSWORD` from the env or `.seed-credentials`. Makes real AI calls when AI is on. Uploads carry an in-app camera stamp like the app does; it checks that a gallery file and the drawn fixture photo are refused, then needs two real camera JPEGs (`E2E_BEFORE_PHOTO`, `E2E_AFTER_PHOTO`) for the rest. |
+| `npm run ai:live` | Live check of the AI provider and agent (real calls). |
 
 ## Environment variables
 
@@ -49,8 +50,16 @@ npm run dev               # tsx watch, http://localhost:4000
 | `SHUTDOWN_TIMEOUT_MS` | `10000` | Time in-flight requests get during shutdown |
 | `DB_SERVER_SELECTION_TIMEOUT_MS` | `10000` | How long startup waits for MongoDB |
 | `AI_PROVIDER` | `disabled` | `disabled` or `anthropic`; see [AI_ANALYSIS_PIPELINE.md](../docs/ai/AI_ANALYSIS_PIPELINE.md) |
-| `ANTHROPIC_API_KEY` | none | Required when `AI_PROVIDER=anthropic`; never logged |
+| `ANTHROPIC_API_KEY` / `AICREDITS_API_KEY` | none | Exactly one when `AI_PROVIDER=anthropic`: direct Anthropic API, or the AiCredits.in prepaid gateway (then `AI_MODEL` must be a gateway ID such as `anthropic/claude-opus-5.5`). Never logged. Out-of-credit or over-budget responses are reported as `CREDITS_EXHAUSTED`. |
 | `AI_MODEL` / `AI_TIMEOUT_MS` / `AI_MAX_ATTEMPTS` | `claude-opus-5-5` / `30000` / `3` | Model ID, per-call timeout, attempts per job |
+| `AI_TRIAGE_MODE` / `AI_AGENT_MAX_TURNS` | `single` / `6` | `agent` = tool-using triage agent (several calls per complaint); max model calls per agent run (2–10) |
+| `EMBEDDING_MODEL` | `text-embedding-3-small` via AiCredits | Semantic duplicate search; `disabled` = word overlap only |
+| `MEDIA_UPLOAD_GATE` | `block` | Authenticity check at upload, before storing. `strict` = also refuse files with only *some* signs of editing/generation or an editing-app tag; `block` = refuse files flagged as AI-generated or edited (`422 MEDIA_REJECTED`); `flag` = store everything and mark for review |
+| `EVIDENCE_CAPTURE` | `camera` | `camera` = every photo/video must carry a valid in-app camera stamp (`422 CAPTURE_REQUIRED` otherwise); `any` = gallery files allowed too |
+| `CAPTURE_SESSION_TTL_SECONDS` | `1800` | How long a camera session token is valid (60–7200) |
+| `FFMPEG_PATH` / `FFPROBE_PATH` | `ffmpeg` / `ffprobe` | Video tools (frames, details, privacy copies, WebM → MP4) |
+| `MAX_VIDEO_SECONDS` | `60` | Longest accepted video (5–300) |
+| `GEOCODER` / `GEOCODER_URL` / `GEOCODER_USER_AGENT` | `nominatim` (`disabled` in tests) / public OpenStreetMap server / `CivicFix/0.1 (…)` | Street addresses for map points (`GET /api/v1/geo/reverse`, and saved on each new complaint as `address`). Server-side, cached per ~11 m, at most 1 request/s per the Nominatim usage policy. `disabled` = ward and nearest mapped place only. |
 | `STORAGE_PROVIDER` / `STORAGE_LOCAL_DIR` | `disabled` / `./uploads` | Evidence file storage: `disabled` (uploads return 503) or `local` |
 | `AUTO_APPROVE_RESOLUTIONS` | `false` | Approve fully clean resolutions without a human (product-owner decision) |
 | `DISPUTE_WINDOW_DAYS` | `14` | Days after resolution in which citizens may dispute (1–90) |
@@ -123,10 +132,25 @@ Access is resolved into the MongoDB query (`scope` + filters combined with `$and
 | Claude adapter (only file importing the SDK) and prompts | `src/ai/anthropicProvider.ts`, `src/ai/prompts.ts` |
 | DB-backed job runner (claim, lease, retry, sweep) | `src/services/analysis/runner.ts` |
 | Duplicate search and text similarity | `src/services/analysis/duplicates.ts`, `textSimilarity.ts` |
-| Media authenticity signals | `src/services/analysis/mediaAuthenticity.ts` |
+| Media authenticity signals (photos and videos) | `src/services/analysis/mediaAuthenticity.ts` |
+| Upload gate (`screenMedia`, `gateAllows`), cached by file hash | `src/services/analysis/index.ts` |
+| ffmpeg/ffprobe: video details, frames, privacy copy, WebM → MP4 | `src/media/video.ts` |
+| In-app camera sessions (signed tokens, stamp checks) | `src/services/captureSessions.ts` |
 | Summary, re-run and `analyzeEvidence` | `src/services/analysis/index.ts` |
 
 `server.ts` starts the runner after the server starts listening and stops it on shutdown. `createApp` without an `analysis` dependency only queues jobs and runs nothing, which keeps tests deterministic. **After pulling Phase 7, run `npm run db:sync-indexes`** on existing databases: an `AIAnalysis` unique index changed.
+
+## Evidence: real media only
+
+Every photo and video goes through these steps **before it is stored**:
+
+1. **Camera stamp** (`EVIDENCE_CAPTURE=camera`): the app opens a camera session (`POST /api/v1/evidence/capture-sessions`), and each capture is uploaded with `X-Capture-Token`, `X-Captured-At` and, when the device has a fix, `X-Capture-Lat` / `X-Capture-Lng` / `X-Capture-Accuracy`. The token is HMAC-signed with a key derived from `JWT_SECRET`, bound to the user, and the capture time must fall inside the session. Files without a valid stamp are refused. The stamp's time and GPS are stored as the evidence's capture time and location and feed the 50 m / timing checks in verification.
+2. **Type and size** from the bytes: JPEG, PNG, WebP (10 MB); MP4, MOV (50 MB, up to `MAX_VIDEO_SECONDS`). Browser recordings (WebM) are converted to MP4 with ffmpeg first.
+3. **Authenticity check**: metadata (AI-generator and editing-app names, IPTC "trained algorithmic media", content-credential manifests) plus a vision model. Videos send 4 frames from across the clip in one call. `MEDIA_UPLOAD_GATE` decides what is refused. The result is stored as the file's authenticity record, so it isn't paid for twice.
+
+After storing, a background job makes the shareable copy (faces and number plates pixelated, metadata removed; videos re-encoded as MP4) and, for resolution files, the before/after comparison.
+
+Limits: the stamp raises the bar but a determined person can still script the API; the AI check reports signals, not proof. If the AI is unavailable, files are let through as `INCONCLUSIVE` and marked for review.
 
 ## Writing routes (conventions)
 
@@ -181,7 +205,10 @@ MONGOMS_SYSTEM_BINARY="C:/Program Files/MongoDB/Server/8.0/bin/mongod.exe" npm t
 | `tests/complaints.test.ts` | Complaint creation (field allowlist, IDs, rate limit), visibility per role and department, filters, classify and reject lifecycle, races |
 | `tests/analysis.test.ts` | AI pipeline with scripted providers: classification validation and side effects, retries, failures, crash recovery, duplicates, analysis API access, Claude adapter mapping, media authenticity |
 | `tests/workOrders.test.ts` | Automatic routing rules, manual assignment, review queue, work-order lifecycle, transfer and cancel, races |
-| `tests/resolution.test.ts` | Evidence upload, type and size checks, access, storage off; resolution checks, verifier decisions, disputes, close, feedback |
+| `tests/resolution.test.ts` | Evidence upload, type and size checks, access, storage off; upload gate (AI/edited files refused, pre-check, strict); in-app camera stamps and WebM conversion; video evidence end to end; resolution checks, verifier decisions, disputes, close, feedback |
+| `tests/video.test.ts` | ffprobe parsing, frame sampling, privacy-copy filter, video authenticity checks (needs ffmpeg; skipped otherwise) |
+| `tests/capture.test.ts` | Camera session tokens (signature, user, time window, GPS) and the strict/block/flag gate |
+| `tests/agent.test.ts` | Triage agent tool loop, limits and failure handling |
 | `tests/notifications.test.ts` | Notification recipients, privacy, no duplicates, failure isolation; audit API access, filters, sanitising |
 | `tests/dashboards.test.ts` | Citizen, member, manager and admin metrics, scoping, empty states, range validation |
 | `tests/e2e.test.ts` | Full workflow through the HTTP API: setup → complaint → AI → assignment → work → verification → dispute → rework → close |

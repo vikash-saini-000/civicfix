@@ -29,8 +29,8 @@ function jobView(a: AnalysisDoc) {
 
 export interface AnalysisServiceOptions extends Omit<RunnerOptions, 'logger'> {
   logger: Logger;
-  /** block (default) = refuse uploads flagged as AI-generated or edited; flag = store and mark for review. */
-  mediaUploadGate?: 'block' | 'flag';
+  /** strict = also refuse "some signs"; block (default) = refuse uploads flagged as AI-generated or edited; flag = store and mark for review. */
+  mediaUploadGate?: 'strict' | 'block' | 'flag';
 }
 
 /** Authenticity outcomes that stop an upload when the gate is `block`. */
@@ -39,6 +39,16 @@ export const BLOCKED_MEDIA_OUTCOMES = new Set(['POTENTIAL_SYNTHETIC_MEDIA', 'POT
 const STABLE_ERRORS = new Set([undefined, 'VIDEO_TOOLS_UNAVAILABLE', 'TOO_LARGE_FOR_VISUAL_MODEL', 'NOT_CONFIGURED']);
 const SCREEN_CACHE_MS = 30 * 60_000;
 const SCREEN_CACHE_MAX = 500;
+
+/** Signals that count as "some signs" for the strict gate. */
+const STRICT_FINDINGS = new Set(['visual_inconsistency_some', 'visual_inconsistency_strong', 'editor_tag', 'declared_ai_generated', 'generator_tag']);
+
+/** Whether an upload passes the gate. Exported for tests. */
+export function gateAllows(gate: 'strict' | 'block' | 'flag', result: Pick<AuthenticityResult, 'outcome' | 'signals'>): boolean {
+  if (gate === 'flag') return true;
+  if (BLOCKED_MEDIA_OUTCOMES.has(result.outcome)) return false;
+  return gate !== 'strict' || !result.signals.some((s) => STRICT_FINDINGS.has(s.finding));
+}
 
 export interface ScreenResult {
   allowed: boolean;
@@ -66,7 +76,7 @@ export function createAnalysisService(opts: AnalysisServiceOptions) {
         if (screenCache.size > SCREEN_CACHE_MAX) screenCache.delete(screenCache.keys().next().value!);
       }
     }
-    return { allowed: !(gate === 'block' && BLOCKED_MEDIA_OUTCOMES.has(result.outcome)), result };
+    return { allowed: gateAllows(gate, result), result };
   }
 
   function requireStaff(relation: string) {

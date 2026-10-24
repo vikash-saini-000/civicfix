@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { tagCapture } from '../lib/captureStamp';
 import type { ApiError } from './errors';
 import { HttpCivicFixApi } from './httpApi';
 
@@ -177,6 +178,24 @@ describe('HttpCivicFixApi', () => {
     expect(fetchMock.mock.calls[2]![0]).toBe('/api/v1/complaints/CF-2026-00420/evidence?purpose=COMPLAINT_REPORT');
     expect(headerOf(fetchMock.mock.calls[2]!, 'Content-Type')).toBe('image/png');
     expect((fetchMock.mock.calls[2]![1] as RequestInit).body).toBe(photo);
+  });
+
+  it('sends the in-app camera stamp with a captured file', async () => {
+    const fetchMock = vi.fn().mockImplementation(async () => json({ success: true, data: { evidence: { id: 'e1' } } }, 201));
+    vi.stubGlobal('fetch', fetchMock);
+    const api = new HttpCivicFixApi({ baseUrl: '', timeoutMs: 1000 });
+    const photo = new File(['jpeg'], 'photo.jpg', { type: 'image/jpeg' });
+    tagCapture(photo, { token: 'tok', capturedAt: '2026-10-25T10:00:00.000Z', lat: 13.0077, lng: 74.7947, accuracy: 6.2 });
+
+    await api.uploadEvidence('CF-2026-00001', photo, 'RESOLUTION');
+    const call = fetchMock.mock.calls[0]!;
+    expect(headerOf(call, 'X-Capture-Token')).toBe('tok');
+    expect(headerOf(call, 'X-Captured-At')).toBe('2026-10-25T10:00:00.000Z');
+    expect(headerOf(call, 'X-Capture-Lat')).toBe('13.0077');
+    expect(headerOf(call, 'X-Capture-Accuracy')).toBe('6');
+
+    await api.uploadEvidence('CF-2026-00001', new File(['jpeg'], 'gallery.jpg', { type: 'image/jpeg' }), 'RESOLUTION');
+    expect(headerOf(fetchMock.mock.calls[1]!, 'X-Capture-Token')).toBeNull();
   });
 
   it('does not create the complaint when a photo looks AI-generated or edited', async () => {

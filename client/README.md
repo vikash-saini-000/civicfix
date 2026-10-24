@@ -33,7 +33,7 @@ npm run build      # type-check + production build
 |---|---|---|
 | `VITE_CIVICFIX_API_MODE` | `http` | `http` = real backend; `mock` = local demo data (development builds only for auth) |
 | `VITE_CIVICFIX_API_BASE_URL` | empty (same origin) | Set only when the API is hosted on another origin (it must then list this app in `CORS_ORIGINS`, and cross-site cookies need `COOKIE_SAMESITE=none` + HTTPS) |
-| `VITE_CIVICFIX_API_TIMEOUT_MS` | `10000` | Per-request timeout |
+| `VITE_CIVICFIX_API_TIMEOUT_MS` | `10000` | Per-request timeout (uploads and media checks use 3 minutes) |
 | `VITE_CIVICFIX_AUTH_MODE` | same as API mode | Must match the API mode |
 
 A failed HTTP request never falls back to mock data.
@@ -72,43 +72,34 @@ the citizen dashboard endpoint, and analytics maps (`/analytics/*`).
 
 ## Citizen complaint submission
 
-The canonical citizen submission route is:
+Routes: `/citizen/complaints/new` (and the alias `/report`), behind the citizen route guard.
 
-```text
-/citizen/complaints/new
-```
+The form collects title, description, map location, optional landmark and category, and up to **3 photos or videos**. On submit, each file is first checked by the server (`POST /api/v1/evidence/check`); if one looks AI-generated or edited the complaint is **not** created and the form returns to the photo step naming the file. Then the complaint is created and the files are uploaded.
 
-`/report` remains as a backwards-compatible alias. Both routes require a validated citizen session through the Phase 2
-route guard.
+## Location in words
 
-The only available complaint-creation contract is provisional. The project blueprint proposes `POST /api/v1/complaints`
-(`docs/CivicFixFullDetails.pdf`, API modules section), while the current frontend draft is defined by
-`src/lib/domain.ts` and `src/api/types.ts`:
+After the citizen taps the map, types coordinates or uses **Use my current location**, `LocationPicker` asks the server for `GET /api/v1/geo/reverse` and shows the street address (OpenStreetMap), the nearest mapped landmark with its distance, and the ward. For "current location" it also shows the GPS accuracy, and warns when the fix is rough (over ±100 m, common on laptops) so the citizen can correct the pin. The review step and all complaint pages show the saved address next to the coordinates.
 
-```text
-title: string
-description: string
-location: { lat: number; lng: number }
-landmark?: string
-selectedCategory: CategoryId | null
-photos: File[]
-```
+## Photos and videos: in-app camera
 
-The client validates the current draft limits (title 5–120 characters, description 10–2000 characters, valid geographic
-coordinates, up to 3 images of 10 MB each). These limits remain provisional until backend validators are available.
+The server's capture rules come from `GET /api/v1/evidence/capture-policy` (`src/lib/capture.ts`, `useCapturePolicy`).
 
-The mock adapter accepts image attachments for local UI testing but stores only photo counts; it does not persist image
-contents to a real service. The HTTP adapter currently reports photo uploads as unavailable because no backend upload,
-storage, or signed-URL contract exists. Text and location submission remains isolated behind the typed API boundary.
+| Server setting | What the app shows |
+|---|---|
+| `EVIDENCE_CAPTURE=camera` (default) | Only **Take a photo or video**. The gallery/file picker isn't offered. |
+| `EVIDENCE_CAPTURE=any` | **Take a photo or video** and **Choose files** |
 
-## Connecting the backend
+`src/components/CameraCapture.tsx`:
 
-The HTTP implementation of `CivicFixApi` is already present in `src/api/httpApi.ts` and targets the proposed
-`/api/v1/complaints` and authentication contracts. Set both `VITE_CIVICFIX_API_MODE=http` and
-`VITE_CIVICFIX_AUTH_MODE=http` when the backend is ready. The optional authentication-token hook remains available
-for a future contract that explicitly requires bearer authentication.
+- Opens a camera session (`POST /api/v1/evidence/capture-sessions`) and the back camera (`getUserMedia`, `facingMode: environment`), and watches GPS while open.
+- **Take photo** grabs a frame into a JPEG; **Record video** uses `MediaRecorder` (MP4 where supported, otherwise WebM, which the server converts), stopping automatically at the server's video limit.
+- Each capture is stamped with the session token, the capture time and the GPS fix (`src/lib/captureStamp.ts`); the API client sends these as `X-Capture-*` headers on the check and the upload.
+- If the page can't use the camera (plain HTTP on a phone, old browser), it opens the phone's own camera app (`<input capture="environment">`) and only accepts a file created in the last 3 minutes.
+- **HTTPS is required** for the camera and GPS on phones (`localhost` is fine on a computer).
 
-The mock stores new complaints in `localStorage` and moves each one to "Under review" after 4 seconds to simulate the backend.
+The same camera is used in the evidence panels: extra citizen photos, worker progress and **resolution** photos/videos, and dispute evidence. Staff see "Taken with the in-app camera" on each such file, and the AI authenticity badge.
+
+Uploads and checks use a longer request timeout (3 minutes) because the server runs the AI check (and ffmpeg for videos) before answering.
 
 ## Citizen dashboard and tracking
 

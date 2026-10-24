@@ -337,7 +337,7 @@ export function createWorkOrderService(deps: WorkOrderServiceDeps) {
     const [users, dept, complaint] = await Promise.all([
       User.find({ _id: { $in: [...userIds] } }).select('name').lean(),
       Department.findById(wo.department).select('name').lean(),
-      Complaint.findById(wo.complaint).select('publicId title status landmark location').lean(),
+      Complaint.findById(wo.complaint).select('publicId title status landmark address location').lean(),
     ]);
     const name = (id: unknown) => users.find((u) => String(u._id) === String(id))?.name ?? null;
     const now = Date.now();
@@ -346,7 +346,7 @@ export function createWorkOrderService(deps: WorkOrderServiceDeps) {
       id: String(wo._id),
       publicId: wo.publicId ?? null,
       complaint: complaint
-        ? { publicId: complaint.publicId, title: complaint.title, status: complaint.status, landmark: complaint.landmark ?? null, location: { lat: complaint.location.coordinates[1], lng: complaint.location.coordinates[0] } }
+        ? { publicId: complaint.publicId, title: complaint.title, status: complaint.status, landmark: complaint.landmark ?? null, address: complaint.address ?? null, location: { lat: complaint.location.coordinates[1], lng: complaint.location.coordinates[0] } }
         : null,
       department: dept ? { id: String(dept._id), name: dept.name } : null,
       priority: wo.priority,

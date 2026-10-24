@@ -1,4 +1,6 @@
 import { Router } from 'express';
+import { disabledGeocoder, type Geocoder } from '../services/geocode.js';
+import { createRateLimiter } from '../middleware/rateLimit.js';
 import { z } from 'zod';
 import type { AuthService } from '../auth/authService.js';
 import { requireAuth } from '../middleware/auth.js';
@@ -102,7 +104,13 @@ export function analyticsRouter(deps: { authService: AuthService; analyticsServi
 }
 
 /** /api/v1/geo/*: reference map data (ward boundaries, mapped places) for any signed-in user. No personal data. */
-export function geoRouter(deps: { authService: AuthService }): Router {
+const reverseQuery = z.strictObject({
+  lat: z.coerce.number().min(-90).max(90),
+  lng: z.coerce.number().min(-180).max(180),
+});
+
+export function geoRouter(deps: { authService: AuthService; geocoder?: Geocoder }): Router {
+  const geocoder = deps.geocoder ?? disabledGeocoder;
   const router = Router();
   router.use(requireAuth(deps.authService), (_req, res, next) => {
     res.setHeader('Cache-Control', 'private, max-age=300');
@@ -111,6 +119,11 @@ export function geoRouter(deps: { authService: AuthService }): Router {
   router.get('/wards', async (_req, res) => {
     const wards = await Ward.find({ isActive: true }).sort({ code: 1 }).select('code name population boundary').lean();
     sendSuccess(res, wards.map((w) => ({ id: String(w._id), code: w.code, name: w.name, population: w.population ?? null, boundary: w.boundary })));
+  });
+  /** A point in words: street address (OpenStreetMap), ward and nearest mapped place. */
+  router.get('/reverse', createRateLimiter({ windowMs: 60_000, limit: 30, keyPart: (req) => req.auth?.userId }), validate({ query: reverseQuery }), async (req, res) => {
+    const q = input<z.infer<typeof reverseQuery>>(req, 'query');
+    sendSuccess(res, await geocoder.describe(q.lat, q.lng));
   });
   router.get('/places', validate({ query: placesQuery }), async (req, res) => {
     const q = input<z.infer<typeof placesQuery>>(req, 'query');

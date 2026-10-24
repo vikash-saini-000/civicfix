@@ -124,6 +124,32 @@ describe('create complaint', () => {
     expect(await AuditLog.exists({ action: 'complaint.created', targetId: c.id, actor: alice.id })).toBeTruthy();
   });
 
+  it('stores the street address looked up by the server, and never waits long for it', async () => {
+    const geocoder = {
+      enabled: true,
+      streetAddress: async () => 'Mega mess left road, Surathkal, Mangaluru taluk 575014',
+      describe: async () => ({ address: 'Mega mess left road, Surathkal, Mangaluru taluk 575014', ward: { code: 'W03', name: 'Surathkal' }, nearestPlace: { name: 'Surathkal bus stand', kind: 'BUS_STOP', distanceMeters: 40 }, source: 'openstreetmap' as const }),
+    };
+    const withAddress = makeApp({ geocoder: geocoder as never });
+    const res = await request(withAddress).post('/api/v1/complaints').set('Authorization', `Bearer ${alice.token}`).send(valid);
+    expect(res.status).toBe(201);
+    expect(res.body.data.complaint.address).toBe('Mega mess left road, Surathkal, Mangaluru taluk 575014');
+
+    // The map-point lookup used by the report form.
+    const reverse = await request(withAddress).get('/api/v1/geo/reverse?lat=13.00773&lng=74.79474').set('Authorization', `Bearer ${alice.token}`);
+    expect(reverse.body.data).toMatchObject({ address: expect.stringContaining('Surathkal'), nearestPlace: { name: 'Surathkal bus stand' } });
+    expect((await request(withAddress).get('/api/v1/geo/reverse?lat=200&lng=74').set('Authorization', `Bearer ${alice.token}`)).status).toBe(400);
+    expect((await request(withAddress).get('/api/v1/geo/reverse?lat=13&lng=74')).status).toBe(401);
+
+    // A hanging lookup doesn't block submission.
+    const slow = makeApp({ geocoder: { ...geocoder, streetAddress: () => new Promise<string>(() => undefined) } as never });
+    const started = Date.now();
+    const late = await request(slow).post('/api/v1/complaints').set('Authorization', `Bearer ${alice.token}`).send(valid);
+    expect(late.status).toBe(201);
+    expect(late.body.data.complaint.address).toBeNull();
+    expect(Date.now() - started).toBeLessThan(6000);
+  });
+
   it('rejects server-controlled fields and writes nothing', async () => {
     for (const extra of [
       { status: 'RESOLVED' },

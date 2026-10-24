@@ -1,6 +1,8 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
-import { ACCEPTED_MEDIA_TYPES, isVideoFile, MAX_IMAGE_BYTES, MAX_VIDEO_SECONDS, mediaFileError } from '../lib/media';
+import { useCapturePolicy } from '../lib/capture';
+import { ACCEPTED_MEDIA_TYPES, isVideoFile, MAX_IMAGE_BYTES, mediaFileError } from '../lib/media';
 import { Button } from './Button';
+import { CameraCapture } from './CameraCapture';
 
 /** Photos and videos per report. */
 export const MAX_PHOTOS = 3;
@@ -19,6 +21,11 @@ export function PhotoInput({ files, onChange, onError, error, disabled = false, 
   const id = useId();
   const inputRef = useRef<HTMLInputElement>(null);
   const [localError, setLocalError] = useState<string | undefined>();
+  const [cameraOpen, setCameraOpen] = useState(false);
+  const policy = useCapturePolicy();
+  // Until the policy is known, assume the strict rule (camera only) so the gallery never flashes up.
+  const cameraOnly = policy?.captureMode !== 'any';
+  const maxVideoSeconds = policy?.maxVideoSeconds ?? 60;
   const previews = useMemo(
     () => files.map((file) => (typeof URL.createObjectURL === 'function' ? URL.createObjectURL(file) : '')),
     [files],
@@ -48,6 +55,15 @@ export function PhotoInput({ files, onChange, onError, error, disabled = false, 
     if (inputRef.current) inputRef.current.value = '';
   }
 
+  function captured(file: File) {
+    setCameraOpen(false);
+    const problem = mediaFileError(file);
+    if (problem) return reportError(problem);
+    if (files.length >= MAX_PHOTOS) return reportError(`You can attach up to ${MAX_PHOTOS} photos or videos.`);
+    onChange([...files, file]);
+    reportError(undefined);
+  }
+
   const messageId = `${id}-msg`;
   const helpId = `${id}-help`;
   const effectiveError = error ?? localError;
@@ -58,8 +74,10 @@ export function PhotoInput({ files, onChange, onError, error, disabled = false, 
         Photos or videos <span className="text-ink-subtle">(optional, up to {MAX_PHOTOS})</span>
       </span>
       <p id={helpId} className="text-[0.75rem] text-ink-muted">
-        Photos: JPEG, PNG or WebP up to 10 MB. Videos: MP4 or MOV up to 50 MB and {MAX_VIDEO_SECONDS} seconds. Do not include private documents or
-        unnecessary personal information.
+        {cameraOnly
+          ? `Take them now with your camera at the location (videos up to ${maxVideoSeconds} seconds). The time and your location are recorded with each one.`
+          : `Take them with your camera, or choose files: photos (JPEG, PNG, WebP) up to 10 MB, videos (MP4, MOV) up to 50 MB and ${maxVideoSeconds} seconds.`}{' '}
+        Do not include private documents or unnecessary personal information.
       </p>
       {disabledReason && <p className="text-[0.75rem] text-ink-muted">{disabledReason}</p>}
       {files.length > 0 && (
@@ -89,25 +107,33 @@ export function PhotoInput({ files, onChange, onError, error, disabled = false, 
         </ul>
       )}
       {files.length < MAX_PHOTOS && (
-        <div>
-          <input
-            ref={inputRef}
-            id={id}
-            type="file"
-            accept={ACCEPTED_MEDIA_TYPES.join(',')}
-            multiple
-            disabled={disabled}
-            className="sr-only"
-            onChange={(event) => add(event.target.files)}
-            aria-labelledby={`${id}-label`}
-            aria-describedby={effectiveError ? `${helpId} ${messageId}` : helpId}
-            aria-invalid={Boolean(effectiveError)}
-          />
-          <Button variant="tertiary" size="sm" onClick={() => inputRef.current?.click()} disabled={disabled}>
-            {files.length ? 'Add another photo or video' : 'Add photos or videos'}
+        <div className="flex flex-wrap gap-2">
+          <Button variant="tertiary" size="sm" onClick={() => setCameraOpen(true)} disabled={disabled || !policy} aria-describedby={helpId}>
+            {files.length ? 'Take another photo or video' : 'Take a photo or video'}
           </Button>
+          {!cameraOnly && (
+            <>
+              <input
+                ref={inputRef}
+                id={id}
+                type="file"
+                accept={ACCEPTED_MEDIA_TYPES.join(',')}
+                multiple
+                disabled={disabled}
+                className="sr-only"
+                onChange={(event) => add(event.target.files)}
+                aria-labelledby={`${id}-label`}
+                aria-describedby={effectiveError ? `${helpId} ${messageId}` : helpId}
+                aria-invalid={Boolean(effectiveError)}
+              />
+              <Button variant="ghost" size="sm" onClick={() => inputRef.current?.click()} disabled={disabled}>
+                {files.length ? 'Add another file' : 'Choose files'}
+              </Button>
+            </>
+          )}
         </div>
       )}
+      {cameraOpen && <CameraCapture maxVideoSeconds={maxVideoSeconds} onCapture={captured} onClose={() => setCameraOpen(false)} />}
       {effectiveError && (
           <p id={messageId} className="text-[0.75rem] text-error" role="alert">
           {effectiveError}

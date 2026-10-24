@@ -1,5 +1,6 @@
 // Process entry point: load config, connect to MongoDB, then start HTTP. Exits non-zero on startup failure.
 import { existsSync } from 'node:fs';
+import { createGeocoder } from './services/geocode.js';
 import { detectVideoTools } from './media/video.js';
 import { createServer } from 'node:http';
 import { createAnthropicProvider } from './ai/anthropicProvider.js';
@@ -72,7 +73,7 @@ async function main() {
     agentMaxTurns: config.ai.agentMaxTurns,
     callTimeoutMs: config.ai.timeoutMs,
   });
-  logger.info({ aiProvider: provider.name, aiGateway: provider.enabled ? (config.ai.baseURL ? 'aicredits' : 'anthropic') : undefined, aiModel: provider.enabled ? provider.model : undefined, aiTriageMode: provider.enabled ? config.ai.triageMode : undefined, embeddings: embeddings.enabled ? embeddings.model : 'disabled', storage: config.storage.provider, video: video.version ?? 'disabled' }, 'analysis configured');
+  logger.info({ aiProvider: provider.name, aiGateway: provider.enabled ? (config.ai.baseURL ? 'aicredits' : 'anthropic') : undefined, aiModel: provider.enabled ? provider.model : undefined, aiTriageMode: provider.enabled ? config.ai.triageMode : undefined, embeddings: embeddings.enabled ? embeddings.model : 'disabled', storage: config.storage.provider, video: video.version ?? 'disabled', uploadGate: config.ai.mediaUploadGate, evidenceCapture: config.capture.mode }, 'analysis configured');
 
   const app = createApp({
     analysis,
@@ -80,6 +81,8 @@ async function main() {
     storage,
     video,
     maxVideoSeconds: config.video.maxSeconds,
+    capture: config.capture,
+    geocoder: createGeocoder(config.geocode, logger),
     verificationPolicy: { ...DEFAULT_VERIFICATION_POLICY, autoApprove: config.verification.autoApprove, disputeWindowDays: config.verification.disputeWindowDays },
     config,
     logger,

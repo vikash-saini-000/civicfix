@@ -73,6 +73,8 @@ export interface Complaint {
   description: string;
   location: GeoPoint;
   landmark?: string;
+  /** Street address looked up by the server (OpenStreetMap) when the complaint was submitted. */
+  address?: string | null;
   selectedCategory: CategoryId | null;
   confirmedCategory: CategoryId | null;
   status: ComplaintStatus;

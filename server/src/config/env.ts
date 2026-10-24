@@ -24,6 +24,8 @@ export interface Config {
   ai: AiConfig;
   storage: StorageConfig;
   video: VideoConfig;
+  capture: CaptureConfig;
+  geocode: GeocodeConfig;
   verification: VerificationConfig;
 }
 
@@ -32,6 +34,19 @@ export interface StorageConfig {
   provider: (typeof STORAGE_PROVIDERS)[number];
   /** Directory for STORAGE_PROVIDER=local. */
   localDir: string;
+}
+
+export interface CaptureConfig {
+  mode: EvidenceCaptureMode;
+  /** How long a camera session token stays valid, in seconds. */
+  sessionTtlSeconds: number;
+}
+
+export interface GeocodeConfig {
+  /** nominatim = street addresses from OpenStreetMap; disabled = ward and nearby place only. */
+  provider: 'nominatim' | 'disabled';
+  url: string;
+  userAgent: string;
 }
 
 export interface VideoConfig {
@@ -78,8 +93,16 @@ export interface AiConfig {
   embeddingModel: string | null;
 }
 
-/** block = refuse uploads the authenticity check flags as AI-generated or edited; flag = store them and mark for review. */
-export const MEDIA_UPLOAD_GATES = ['block', 'flag'] as const;
+/**
+ * strict = also refuse files with only "some" signs of editing/generation (or an editing-app tag);
+ * block = refuse uploads the authenticity check flags as AI-generated or edited;
+ * flag = store them and mark for review.
+ */
+export const MEDIA_UPLOAD_GATES = ['strict', 'block', 'flag'] as const;
+
+/** camera = photos/videos must be taken in the app (camera opens, time and GPS stamped); any = gallery files allowed too. */
+export const EVIDENCE_CAPTURE_MODES = ['camera', 'any'] as const;
+export type EvidenceCaptureMode = (typeof EVIDENCE_CAPTURE_MODES)[number];
 export type MediaUploadGate = (typeof MEDIA_UPLOAD_GATES)[number];
 
 export const AI_TRIAGE_MODES = ['single', 'agent'] as const;
@@ -218,6 +241,15 @@ export function loadConfig(env: Env = process.env): Config {
   const ffmpegPath = read('FFMPEG_PATH') ?? 'ffmpeg';
   const ffprobePath = read('FFPROBE_PATH') ?? 'ffprobe';
   const maxVideoSeconds = int('MAX_VIDEO_SECONDS', 60, 5, 300);
+  const captureMode = (read('EVIDENCE_CAPTURE') ?? 'camera') as EvidenceCaptureMode;
+  if (!EVIDENCE_CAPTURE_MODES.includes(captureMode)) issues.push(`EVIDENCE_CAPTURE must be one of ${EVIDENCE_CAPTURE_MODES.join(', ')}`);
+  const captureSessionTtlSeconds = int('CAPTURE_SESSION_TTL_SECONDS', 1800, 60, 7200);
+  // Off in tests so they never call the internet.
+  const geocoder = (read('GEOCODER') ?? (nodeEnv === 'test' ? 'disabled' : 'nominatim')) as GeocodeConfig['provider'];
+  if (!['nominatim', 'disabled'].includes(geocoder)) issues.push('GEOCODER must be nominatim or disabled');
+  const geocoderUrl = read('GEOCODER_URL') ?? 'https://nominatim.openstreetmap.org';
+  if (!/^https?:\/\/[^\s]+$/.test(geocoderUrl)) issues.push('GEOCODER_URL must be an http(s) URL');
+  const geocoderUserAgent = read('GEOCODER_USER_AGENT') ?? 'CivicFix/0.1 (civic complaint platform)';
   const autoApproveRaw = read('AUTO_APPROVE_RESOLUTIONS') ?? 'false';
   if (!['true', 'false'].includes(autoApproveRaw)) issues.push('AUTO_APPROVE_RESOLUTIONS must be true or false');
   const disputeWindowDays = int('DISPUTE_WINDOW_DAYS', 14, 1, 90);
@@ -253,6 +285,8 @@ export function loadConfig(env: Env = process.env): Config {
     },
     storage: { provider: storageProvider, localDir: storageLocalDir },
     video: { ffmpegPath, ffprobePath, maxSeconds: maxVideoSeconds },
+    capture: { mode: captureMode, sessionTtlSeconds: captureSessionTtlSeconds },
+    geocode: { provider: geocoder, url: geocoderUrl, userAgent: geocoderUserAgent },
     verification: { autoApprove: autoApproveRaw === 'true', disputeWindowDays },
   };
 }

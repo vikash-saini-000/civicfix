@@ -5,6 +5,7 @@ import { useOptionalAuth } from '../auth/AuthContext';
 import type { ComplaintAnalysis, Evidence, EvidencePurpose, WorkOrderStatus } from '../api/operationsTypes';
 import { categoryLabel, formatDateTime, getPriorityMeta } from '../lib/domain';
 import { cx } from '../lib/cx';
+import { useCapturePolicy } from '../lib/capture';
 import { MAX_VIDEO_SECONDS, mediaFileError } from '../lib/media';
 import { useAction, useResource } from '../lib/useResource';
 import {
@@ -18,6 +19,7 @@ import {
 } from '../lib/workflow';
 import { Badge } from './Badge';
 import { Button } from './Button';
+import { CameraCapture } from './CameraCapture';
 import { Card } from './Card';
 import { ErrorState, LoadingIndicator } from './Feedback';
 import { TextArea, TextInput } from './Field';
@@ -141,7 +143,7 @@ export function ReasonAction({
 export function EvidencePanel({
   publicId,
   uploadPurpose,
-  uploadLabel = 'Add a photo or video',
+  uploadLabel = 'Take a photo or video',
   showAuthenticity = false,
   filter,
   onUploaded,
@@ -161,10 +163,15 @@ export function EvidencePanel({
   const inputRef = useRef<HTMLInputElement>(null);
   const { busy, error, setError, run } = useAction();
   const items = (evidence.data ?? []).filter(filter ?? (() => true));
+  const [cameraOpen, setCameraOpen] = useState(false);
+  const policy = useCapturePolicy();
+  const cameraOnly = policy?.captureMode !== 'any';
+  const maxVideoSeconds = policy?.maxVideoSeconds ?? MAX_VIDEO_SECONDS;
 
-  async function upload(files: FileList | null) {
+  async function upload(files: FileList | File[] | null) {
     const file = files?.[0];
     if (inputRef.current) inputRef.current.value = '';
+    setCameraOpen(false);
     if (!file || !uploadPurpose) return;
     const problem = mediaFileError(file);
     if (problem) return setError(problem);
@@ -190,6 +197,7 @@ export function EvidencePanel({
                 <p className="font-semibold">{EVIDENCE_PURPOSE_LABELS[item.purpose] ?? item.purpose}</p>
                 {item.caption && <p className="text-ink-muted">{item.caption}</p>}
                 <p className="text-ink-muted">{formatDateTime(item.createdAt)}</p>
+                {item.captureMethod === 'IN_APP_CAMERA' && <p className="text-ink-muted">Taken with the in-app camera</p>}
                 {showAuthenticity && item.authenticity && (
                   <Badge tone={item.authenticity === 'NO_SUSPICIOUS_SIGNALS_DETECTED' ? 'success' : item.authenticity.startsWith('POTENTIAL') ? 'error' : 'neutral'} className="mt-1">
                     {AUTHENTICITY_LABELS[item.authenticity] ?? item.authenticity}
@@ -203,13 +211,24 @@ export function EvidencePanel({
       {uploadPurpose && (
         <div>
           {error && <Notification kind="error" title={error} className="mb-3" />}
-          <input ref={inputRef} type="file" accept={ACCEPTED_UPLOAD_TYPES.join(',')} className="sr-only" aria-label={uploadLabel} onChange={(e) => void upload(e.target.files)} />
-          <Button variant="tertiary" size="sm" onClick={() => inputRef.current?.click()} disabled={busy}>
-            {busy ? 'Checking and uploading…' : uploadLabel}
-          </Button>
+          <div className="flex flex-wrap gap-2">
+            <Button variant="tertiary" size="sm" onClick={() => setCameraOpen(true)} disabled={busy || !policy}>
+              {busy ? 'Checking and uploading…' : uploadLabel}
+            </Button>
+            {!cameraOnly && (
+              <>
+                <input ref={inputRef} type="file" accept={ACCEPTED_UPLOAD_TYPES.join(',')} className="sr-only" aria-label="Choose a file" onChange={(e) => void upload(e.target.files)} />
+                <Button variant="ghost" size="sm" onClick={() => inputRef.current?.click()} disabled={busy}>
+                  Choose a file
+                </Button>
+              </>
+            )}
+          </div>
           <p className="mt-1 text-[0.75rem] text-ink-muted">
-            Use an original photo or video from your camera (videos: MP4 or MOV, up to {MAX_VIDEO_SECONDS} seconds). AI-generated or edited files are not accepted.
+            {cameraOnly ? 'Take it now with the camera' : 'Use an original photo or video from your camera'} (videos up to {maxVideoSeconds} seconds). The time and your
+            location are recorded with camera captures. AI-generated or edited files are not accepted.
           </p>
+          {cameraOpen && <CameraCapture maxVideoSeconds={maxVideoSeconds} onCapture={(file) => void upload([file])} onClose={() => setCameraOpen(false)} />}
         </div>
       )}
     </section>

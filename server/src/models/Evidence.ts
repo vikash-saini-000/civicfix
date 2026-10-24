@@ -85,6 +85,10 @@ const evidenceSchema = new Schema(
     captureLocation: { type: geoPointSchema },
     /** Videos: length in seconds (from ffprobe). */
     durationSec: { type: Number, min: 0 },
+    /** IN_APP_CAMERA = taken with the app's camera, time/GPS stamped at capture; FILE_UPLOAD = chosen from files. */
+    captureMethod: { type: String, enum: ['IN_APP_CAMERA', 'FILE_UPLOAD'] },
+    /** GPS accuracy (metres) reported by the device for an in-app capture. */
+    captureAccuracyM: { type: Number, min: 0 },
 
     notes: { type: String, trim: true, maxlength: 1000 },
     verificationState: { type: String, enum: EVIDENCE_VERIFICATION_STATES, required: true, default: 'PENDING' },
