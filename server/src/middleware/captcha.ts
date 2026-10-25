@@ -25,7 +25,7 @@ export const disabledCaptcha: CaptchaVerifier = {
 
 export interface TurnstileOptions {
   secretKey: string;
-  /** Hostnames the token must have been issued on (e.g. civicfix.pages.dev). Empty = any. */
+  /** Hostnames the token must have been issued on (e.g. civic-fix-system.vercel.app). Empty = every token refused. */
   allowedHostnames: string[];
   logger: Logger;
   timeoutMs?: number;
@@ -62,7 +62,8 @@ export function createTurnstileVerifier(opts: TurnstileOptions): CaptchaVerifier
         opts.logger.info({ errorCodes: body['error-codes'], action }, 'turnstile token rejected');
         return false;
       }
-      if (opts.allowedHostnames.length > 0 && !opts.allowedHostnames.includes(body.hostname ?? '')) {
+      // Fail closed: an empty allowlist accepts nothing (config also refuses to start without one).
+      if (!opts.allowedHostnames.includes(body.hostname ?? '')) {
         opts.logger.warn({ hostname: body.hostname, action }, 'turnstile token issued for another hostname');
         return false;
       }

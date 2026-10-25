@@ -414,3 +414,18 @@ describe('frontend proxy client IP (PROXY_SHARED_SECRET)', () => {
     expect(issuesFor({ ...base, PROXY_SHARED_SECRET: 'short' })).toEqual(['PROXY_SHARED_SECRET must be at least 32 random characters']);
   });
 });
+
+describe('Turnstile hostname allowlist (Cloudflare checklist)', () => {
+  const on = { ...base, CAPTCHA_PROVIDER: 'turnstile', TURNSTILE_SECRET_KEY: 'server-secret' };
+  it('is required whenever Turnstile is on', () => {
+    expect(issuesFor(on).join(' | ')).toMatch(/TURNSTILE_HOSTNAMES is required/);
+    expect(loadConfig({ ...on, TURNSTILE_HOSTNAMES: 'localhost' }).captcha.allowedHostnames).toEqual(['localhost']);
+  });
+  it('refuses developer hostnames in production', () => {
+    const prod = { ...on, NODE_ENV: 'production', CORS_ORIGINS: 'https://civic-fix-system.vercel.app' };
+    for (const h of ['localhost', '127.0.0.1', 'civic-fix-system.vercel.app,::1']) {
+      expect(issuesFor({ ...prod, TURNSTILE_HOSTNAMES: h }).join(' | ')).toMatch(/cannot include localhost/);
+    }
+    expect(issuesFor({ ...prod, TURNSTILE_HOSTNAMES: 'civic-fix-system.vercel.app' }).join(' | ')).not.toMatch(/TURNSTILE/);
+  });
+});

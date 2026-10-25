@@ -48,7 +48,7 @@ export interface CaptchaConfig {
   /** turnstile = register, login and new complaints need a Cloudflare Turnstile token checked server-side. */
   provider: (typeof CAPTCHA_PROVIDERS)[number];
   secretKey?: string;
-  /** Hostnames the widget may run on; tokens from anywhere else are refused. Empty = any. */
+  /** Hostnames the widget may run on; tokens from anywhere else are refused. Required with turnstile. */
   allowedHostnames: string[];
 }
 
@@ -286,7 +286,11 @@ export function loadConfig(env: Env = process.env): Config {
   const turnstileSecret = read('TURNSTILE_SECRET_KEY');
   if (captchaProvider === 'turnstile' && !turnstileSecret) issues.push('TURNSTILE_SECRET_KEY is required when CAPTCHA_PROVIDER=turnstile');
   const captchaHostnames = (read('TURNSTILE_HOSTNAMES') ?? '').split(',').map((h) => h.trim().toLowerCase()).filter(Boolean);
-  if (captchaHostnames.some((h) => !/^[a-z0-9.-]+$/.test(h))) issues.push('TURNSTILE_HOSTNAMES must be comma-separated hostnames like civicfix.pages.dev (no scheme or path)');
+  if (captchaHostnames.some((h) => !/^[a-z0-9.:-]+$/.test(h))) issues.push('TURNSTILE_HOSTNAMES must be comma-separated hostnames like civic-fix-system.vercel.app (no scheme or path)');
+  // Tokens are only accepted from listed hostnames, so the list must never be empty, and production
+  // must not accept tokens minted on a developer machine.
+  if (captchaProvider === 'turnstile' && captchaHostnames.length === 0) issues.push('TURNSTILE_HOSTNAMES is required when CAPTCHA_PROVIDER=turnstile (e.g. civic-fix-system.vercel.app, or localhost for development)');
+  if (isProd && captchaHostnames.some((h) => ['localhost', '127.0.0.1', '::1'].includes(h))) issues.push('TURNSTILE_HOSTNAMES cannot include localhost, 127.0.0.1 or ::1 in production');
   const mediaUploadGate = (read('MEDIA_UPLOAD_GATE') ?? 'block') as MediaUploadGate;
   if (!MEDIA_UPLOAD_GATES.includes(mediaUploadGate)) issues.push(`MEDIA_UPLOAD_GATE must be one of ${MEDIA_UPLOAD_GATES.join(', ')}`);
   const ffmpegPath = read('FFMPEG_PATH') ?? 'ffmpeg';
