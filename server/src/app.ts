@@ -7,6 +7,7 @@ import type { Config } from './config/env.js';
 import { errorHandler, notFound } from './middleware/errors.js';
 import { requestContext, requestLogger } from './middleware/requestContext.js';
 import { requireJson } from './middleware/requireJson.js';
+import { proxyClientIp } from './middleware/proxyClientIp.js';
 import { disabledProvider } from './ai/types.js';
 import { createAuthService } from './auth/authService.js';
 import { safeError } from './config/database.js';
@@ -27,7 +28,7 @@ import { AppError } from './utils/errors.js';
 import type { Logger } from './utils/logger.js';
 
 export interface AppDeps extends HealthDeps {
-  config: Pick<Config, 'nodeEnv' | 'corsOrigins' | 'jsonBodyLimit' | 'auth'> & Partial<Pick<Config, 'trustProxyHops'>>;
+  config: Pick<Config, 'nodeEnv' | 'corsOrigins' | 'jsonBodyLimit' | 'auth'> & Partial<Pick<Config, 'trustProxyHops' | 'proxySharedSecret'>>;
   logger: Logger;
   /** Synchronous check used to refuse API traffic while MongoDB is down. */
   isDatabaseConnected: () => boolean;
@@ -83,6 +84,8 @@ export function createApp(deps: AppDeps): Express {
   app.disable('x-powered-by');
   // Number of trusted proxy hops; 0 means req.ip is the socket address.
   app.set('trust proxy', config.trustProxyHops ?? 0);
+  // Separate frontend project: its proxy passes on the visitor's IP (see middleware/proxyClientIp.ts).
+  if (config.proxySharedSecret) app.use(proxyClientIp(config.proxySharedSecret));
 
   // 1. Request ID and logging first, so every later log line and error carries the ID.
   app.use(requestContext(logger));

@@ -1,4 +1,4 @@
-// Vercel function entry point (see /vercel.json and /api/index.mjs). The same Express app as server.ts,
+// Vercel function entry point for the API project (see server/vercel.json and server/api/index.mjs). The same Express app as server.ts,
 // adapted to serverless:
 //  - MongoDB connects once per function instance and is reused by later requests.
 //  - Nothing runs between requests, so after each response the queued AI/privacy jobs keep running

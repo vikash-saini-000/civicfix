@@ -12,55 +12,78 @@ Status as of Phase 12. **Not deployed anywhere yet.** The Docker image below was
 | AI (optional) | `AI_PROVIDER=anthropic` + `ANTHROPIC_API_KEY`. Without it, complaints go to manual triage. |
 | Proxy | TLS terminated by a reverse proxy or load balancer; set `TRUST_PROXY` to the number of hops. |
 
-## Vercel setup (frontend + API), Cloudinary storage, Turnstile
+## Vercel setup (two projects), Cloudinary storage, Turnstile
 
 ```
-Browser ──> Vercel project (one domain)
-              ├── static app (client/dist)
-              └── /api/* and /health/*  ──> function api/index.mjs (Express)  ──> MongoDB Atlas
+Browser ──> frontend project  civic-fix-system.vercel.app   (Root Directory: client)
+              ├── static app (dist)
+              └── /api/*  ──> api/proxy.js ──> API project  civic-fix-api.vercel.app   (Root Directory: server)
+                                                   └── api/index.mjs (Express) ──> MongoDB Atlas
 Browser ──(signed upload)──> Cloudinary staging ──> API downloads, checks, stores privately
 ```
 
-Frontend and API are **one Vercel project** on one domain, so the refresh cookie is first-party (`COOKIE_SAMESITE=lax`), there is no CORS, and no proxy is needed. Config lives in `/vercel.json`; the function is `/api/index.mjs`, which loads the compiled `server/dist/vercel.js`.
+Frontend and API are **separate Vercel projects** from the same repository. The frontend's `/api/*` requests go through a small proxy function (`client/api/proxy.js`), so the browser only ever talks to the frontend's own domain:
+
+- The refresh cookie stays first-party (`COOKIE_SAMESITE=lax`). Two `*.vercel.app` domains count as different sites, and Safari and Brave block cross-site cookies, so calling the API domain directly would log users out on every reload.
+- No CORS preflights.
+- The proxy passes the visitor's IP with a shared secret (`PROXY_SHARED_SECRET`). Without that, every visitor would appear to come from the proxy and share one set of per-IP limits (e.g. 10 registrations an hour for everyone).
 
 ### What changes on serverless (and how it's handled)
 
 | Vercel limit | Handling |
 |---|---|
-| 4.5 MB per request **and** response | Files never pass through the API: browsers upload to Cloudinary with a one-off signature, and view files through 15-minute signed links. |
-| Nothing runs between requests | After each response the function keeps processing queued AI/privacy jobs (`waitUntil`, up to ~250 s). A daily cron finishes leftovers. |
-| No ffmpeg on the image | `@ffmpeg-installer` / `@ffprobe-installer` binaries are bundled (`includeFiles` in `vercel.json`). |
-| Hobby cron runs once a day | SLA-overdue alerts are recorded daily (hourly needs Pro: change `crons[0].schedule`). |
+| 4.5 MB per request **and** response | Files never pass through the API or the proxy: browsers upload to Cloudinary with a one-off signature, and view files through 15-minute signed links. |
+| Nothing runs between requests | After each response the API keeps processing queued AI/privacy jobs (`waitUntil`, up to ~250 s). A daily cron finishes leftovers. |
+| No ffmpeg on the image | `@ffmpeg-installer` / `@ffprobe-installer` binaries are bundled (`includeFiles` in `server/vercel.json`). |
+| Hobby cron runs once a day | SLA-overdue alerts are recorded daily (hourly needs Pro). |
 | Instances come and go | MongoDB connects once per instance. Rate limits are per instance (see Risks). |
 
-### 1. Vercel project
+### 1a. API project (create first)
 
-Import the GitHub repo. Leave **Root Directory empty** (repository root): `vercel.json` sets install, build, output and function settings. Node.js version: 22 or newer.
+Vercel → Add New → Project → import the repo. **Root Directory: `server`**. Project name e.g. `civic-fix-api` (gives `civic-fix-api.vercel.app`). `server/vercel.json` sets the build, function and cron settings. Node.js 22 or newer.
 
-Environment variables (Project → Settings → Environment Variables, *Production*):
+Environment variables (*Production*):
 
 ```
 NODE_ENV=production
-MONGODB_URI=mongodb+srv://…            # Atlas; allow Vercel's egress (0.0.0.0/0 on free Atlas)
+MONGODB_URI=mongodb+srv://…                       # Atlas; allow Vercel (0.0.0.0/0 on free Atlas)
 JWT_SECRET=<48+ random chars>
-CORS_ORIGINS=https://<project>.vercel.app   # plus your custom domain
-TRUST_PROXY=1                          # Vercel's edge sets X-Forwarded-For to the real client IP
+CORS_ORIGINS=https://civic-fix-system.vercel.app  # the FRONTEND origin (+ custom domain)
+TRUST_PROXY=1
+PROXY_SHARED_SECRET=<32+ random chars>            # same value as in the frontend project
 COOKIE_SAMESITE=lax
 STORAGE_PROVIDER=cloudinary
 CLOUDINARY_URL=cloudinary://<api_key>:<api_secret>@<cloud_name>
 CLOUDINARY_FOLDER=civicfix
 CAPTCHA_PROVIDER=turnstile
 TURNSTILE_SECRET_KEY=<secret key>
-TURNSTILE_HOSTNAMES=<project>.vercel.app,<custom domain>
-VITE_TURNSTILE_SITE_KEY=<site key>     # read at build time by the frontend
-CRON_SECRET=<32+ random chars>         # Vercel sends it to the cron endpoint automatically
+TURNSTILE_HOSTNAMES=civic-fix-system.vercel.app   # the FRONTEND hostname (+ custom domain)
+CRON_SECRET=<32+ random chars>
 EVIDENCE_CAPTURE=camera
 # plus AI_* settings if AI is on
 ```
 
-Before the first deploy, from your machine against the production database: `npm run db:sync-indexes:prod` and create the first admin with `user:create:prod` (see *Build and run* below). `autoIndex` is off in production.
+Generate secrets with `node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"`.
 
-**Preview deployments** get their own URLs, which are not in `CORS_ORIGINS` / `TURNSTILE_HOSTNAMES`. Give the *Preview* environment its own database, Cloudinary folder (`CLOUDINARY_FOLDER=civicfix-preview`) and Turnstile hostnames, or don't set Preview variables at all. Never reuse production secrets there.
+Before the first real use, from your machine against the production database: `npm run db:sync-indexes:prod`, then create the first admin with `user:create:prod` (see *Build and run*). `autoIndex` is off in production.
+
+### 1b. Frontend project
+
+Add New → Project → import the **same** repo again. **Root Directory: `client`**. Project name `civic-fix-system` (gives `civic-fix-system.vercel.app`, if the name is free). Framework: Vite (set by `client/vercel.json`).
+
+Environment variables (*Production*):
+
+```
+API_ORIGIN=https://civic-fix-api.vercel.app   # the API project's URL, no trailing slash
+PROXY_SHARED_SECRET=<same value as the API>
+VITE_TURNSTILE_SITE_KEY=<site key>            # read at build time
+```
+
+Leave `VITE_CIVICFIX_API_BASE_URL` unset (the app calls its own `/api`, which the proxy forwards).
+
+Order matters only for the URLs: deploy the API first to learn its URL, then set `API_ORIGIN`. If you rename the frontend later, update `CORS_ORIGINS` and `TURNSTILE_HOSTNAMES` on the API and redeploy it.
+
+**Preview deployments** get their own URLs, which are not in `CORS_ORIGINS` / `TURNSTILE_HOSTNAMES`. Give the *Preview* environment of both projects their own database, Cloudinary folder and Turnstile hostnames, or leave Preview variables unset. Never reuse production secrets there.
 
 ### 2. File storage: Cloudinary
 
@@ -75,17 +98,17 @@ Free plan fit: 25 monthly credits (1 credit ≈ 1 GB storage or 1 GB bandwidth);
 
 ### 3. Human check: Cloudflare Turnstile
 
-1. Cloudflare dashboard → Turnstile → Add widget. Hostnames: `<project>.vercel.app` and your custom domain. Mode: Managed.
-2. Set `VITE_TURNSTILE_SITE_KEY` (site key) and, on the API, `CAPTCHA_PROVIDER=turnstile`, `TURNSTILE_SECRET_KEY`, `TURNSTILE_HOSTNAMES`. Redeploy so the frontend build picks up the site key.
+1. Cloudflare dashboard → Turnstile → Add widget. Hostname: the **frontend** domain (`civic-fix-system.vercel.app`, plus any custom domain). Mode: Managed.
+2. Frontend project: `VITE_TURNSTILE_SITE_KEY` (site key). API project: `CAPTCHA_PROVIDER=turnstile`, `TURNSTILE_SECRET_KEY`, `TURNSTILE_HOSTNAMES`. Redeploy the frontend so its build picks up the site key.
 
 Register, login and new complaints then need a token in the `X-Turnstile-Token` header. The API verifies each one with Siteverify (valid, unused, our hostname, exactly that action: `register`, `login` or `complaint`) and refuses if Siteverify can't be reached. Turn both sides on together.
 
 ### 4. After the first deploy
 
-- `GET https://<domain>/health/ready` returns 200.
+- `GET https://civic-fix-api.vercel.app/health/ready` returns 200, and `https://civic-fix-system.vercel.app/api/v1/auth/me` returns 401 (proxy reaches the API).
 - Register (Turnstile shows), file a complaint with a phone photo and a short video, open it as staff: the image appears (blurred copy) and the video plays.
-- Vercel → Logs: the request IP is your own public IP (confirms `TRUST_PROXY=1`).
-- Vercel → Settings → Cron Jobs: run the maintenance job once manually; it returns 200.
+- API project → Logs: the request IP is your own public IP, not a Vercel address (confirms `PROXY_SHARED_SECRET` matches in both projects).
+- API project → Settings → Cron Jobs: run the maintenance job once manually; it returns 200.
 
 ## Configuration (production)
 
@@ -146,4 +169,4 @@ The image runs as the non-root `node` user, contains only production dependencie
 - [ ] Turnstile on both sides (`VITE_TURNSTILE_SITE_KEY` and `CAPTCHA_PROVIDER=turnstile`); one register and one complaint tested on the live site.
 - [ ] Cloudinary: a plain `res.cloudinary.com/...` URL for an uploaded file returns 401 (assets are private); photo and video upload and view tested on the live site.
 - [ ] `CRON_SECRET` set; the maintenance cron ran once successfully.
-- [ ] Vercel logs show real visitor IPs (confirms `TRUST_PROXY=1`).
+- [ ] API logs show real visitor IPs (confirms `PROXY_SHARED_SECRET` is the same in both projects).

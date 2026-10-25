@@ -20,6 +20,8 @@ export interface Config {
   dbServerSelectionTimeoutMs: number;
   /** Number of trusted reverse-proxy hops in front of the app (0 = none). Affects req.ip. */
   trustProxyHops: number;
+  /** Shared with the frontend's Vercel proxy; lets it pass on the visitor's IP. Unset = header ignored. */
+  proxySharedSecret?: string;
   auth: AuthConfig;
   ai: AiConfig;
   storage: StorageConfig;
@@ -174,6 +176,10 @@ export function loadConfig(env: Env = process.env): Config {
   const dbServerSelectionTimeoutMs = int('DB_SERVER_SELECTION_TIMEOUT_MS', 10_000, 500, 120_000);
   const trustProxyHops = int('TRUST_PROXY', 0, 0, 10);
   const host = read('HOST') ?? '0.0.0.0';
+  const proxySharedSecret = read('PROXY_SHARED_SECRET');
+  if (proxySharedSecret !== undefined && (proxySharedSecret.length < 32 || WEAK_SECRET.test(proxySharedSecret))) {
+    issues.push('PROXY_SHARED_SECRET must be at least 32 random characters');
+  }
 
   const mongodbUri = read('MONGODB_URI') ?? '';
   if (!mongodbUri) issues.push('MONGODB_URI is required');
@@ -315,6 +321,7 @@ export function loadConfig(env: Env = process.env): Config {
     shutdownTimeoutMs,
     dbServerSelectionTimeoutMs,
     trustProxyHops,
+    proxySharedSecret,
     auth: { jwtSecret, accessTokenTtlSeconds, refreshTokenTtlDays, cookieSecure, cookieSameSite },
     ai: {
       provider: aiProvider,

@@ -66,6 +66,7 @@ npm run dev               # tsx watch, http://localhost:4000
 | `CAPTCHA_PROVIDER` / `TURNSTILE_SECRET_KEY` / `TURNSTILE_HOSTNAMES` | `disabled` / — / any | `turnstile` = register, login and new complaints need a Cloudflare Turnstile token (header `X-Turnstile-Token`), checked with Siteverify. Hostnames restrict where the token may come from. |
 | `AUTO_APPROVE_RESOLUTIONS` | `false` | Approve fully clean resolutions without a human (product-owner decision) |
 | `DISPUTE_WINDOW_DAYS` | `14` | Days after resolution in which citizens may dispute (1–90) |
+| `PROXY_SHARED_SECRET` | — | Separate frontend project on Vercel: its `/api` proxy sends the visitor IP (`X-CivicFix-Client-IP`) with this secret; the IP is trusted only when the secret matches. 32+ characters, same value in both projects. |
 | `TRUST_PROXY` | `0` | Number of reverse proxies in front of the API (0–10). Set it when deployed behind one, so client IPs and rate limits are correct. |
 
 ## Startup, database and shutdown

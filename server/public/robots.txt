@@ -1,0 +1,3 @@
+# CivicFix API. Vercel needs an output folder even for an API-only project; this is its only file.
+User-agent: *
+Disallow: /

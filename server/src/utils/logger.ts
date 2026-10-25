@@ -7,6 +7,7 @@ export type { Logger };
 const REDACT_PATHS = [
   'req.headers.authorization',
   'req.headers.cookie',
+  'req.headers["x-civicfix-proxy-secret"]',
   'req.headers["x-api-key"]',
   'res.headers["set-cookie"]',
   '*.password',

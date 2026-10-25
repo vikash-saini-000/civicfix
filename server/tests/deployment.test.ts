@@ -362,3 +362,55 @@ describe('runUntilQuiet', () => {
     expect(await AIAnalysis.countDocuments({ status: { $in: ['PENDING', 'RUNNING'] } })).toBe(0);
   });
 });
+
+describe('frontend proxy client IP (PROXY_SHARED_SECRET)', () => {
+  const SECRET = 'Pr0xyS3cr3tValue_9f2c1a7e5b8d4f60a3';
+  // Register is limited per IP: 2 per window here, so whose IP is used is visible.
+  const limited = (proxySharedSecret?: string) =>
+    createApp({
+      config: { nodeEnv: 'test', corsOrigins: [], jsonBodyLimit: '100kb', auth: testAuthConfig, trustProxyHops: 1, proxySharedSecret },
+      logger: silent,
+      isDatabaseConnected: () => true,
+      checkDatabase: async () => true,
+      isShuttingDown: () => false,
+      authRateLimits: { register: { windowMs: 60_000, limit: 2 }, loginPerIp: many, loginPerIpAndEmail: many, refresh: many },
+    });
+  const register = (a: ReturnType<typeof createApp>, headers: Record<string, string>) =>
+    request(a).post('/api/v1/auth/register').set('Content-Type', 'application/json').set(headers).send(JSON.stringify({ email: 'bad' }));
+
+  it('gives each proxied visitor their own limit when the secret matches', async () => {
+    const a = limited(SECRET);
+    const via = (ip: string) => ({ 'X-Forwarded-For': '10.1.1.1', 'X-CivicFix-Proxy-Secret': SECRET, 'X-CivicFix-Client-IP': ip });
+    expect((await register(a, via('198.51.100.1'))).status).toBe(400);
+    expect((await register(a, via('198.51.100.1'))).status).toBe(400);
+    expect((await register(a, via('198.51.100.1'))).status).toBe(429);
+    // Another visitor behind the same proxy address is not affected.
+    expect((await register(a, via('198.51.100.2'))).status).toBe(400);
+  });
+
+  it('ignores the client IP header without the right secret, so it cannot be spoofed', async () => {
+    const a = limited(SECRET);
+    const forged = (ip: string) => ({ 'X-Forwarded-For': '203.0.113.7', 'X-CivicFix-Proxy-Secret': 'wrong', 'X-CivicFix-Client-IP': ip });
+    expect((await register(a, forged('1.1.1.1'))).status).toBe(400);
+    expect((await register(a, forged('2.2.2.2'))).status).toBe(400);
+    expect((await register(a, forged('3.3.3.3'))).status).toBe(429); // all counted against 203.0.113.7
+  });
+
+  it('ignores the header entirely when no secret is configured, and rejects non-IP values', async () => {
+    const a = limited(undefined);
+    const h = (ip: string) => ({ 'X-Forwarded-For': '203.0.113.8', 'X-CivicFix-Proxy-Secret': SECRET, 'X-CivicFix-Client-IP': ip });
+    await register(a, h('1.1.1.1'));
+    await register(a, h('2.2.2.2'));
+    expect((await register(a, h('3.3.3.3'))).status).toBe(429);
+    const b = limited(SECRET);
+    const junk = { 'X-Forwarded-For': '203.0.113.9', 'X-CivicFix-Proxy-Secret': SECRET, 'X-CivicFix-Client-IP': 'not-an-ip' };
+    await register(b, junk);
+    await register(b, junk);
+    expect((await register(b, junk)).status).toBe(429); // fell back to the real address
+  });
+
+  it('validates PROXY_SHARED_SECRET', () => {
+    expect(loadConfig({ ...base, PROXY_SHARED_SECRET: SECRET }).proxySharedSecret).toBe(SECRET);
+    expect(issuesFor({ ...base, PROXY_SHARED_SECRET: 'short' })).toEqual(['PROXY_SHARED_SECRET must be at least 32 random characters']);
+  });
+});
