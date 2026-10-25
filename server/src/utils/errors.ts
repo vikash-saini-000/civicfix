@@ -5,6 +5,8 @@ export const ERROR_CODES = {
   UNAUTHENTICATED: 401,
   INVALID_CREDENTIALS: 401,
   FORBIDDEN: 403,
+  /** Turnstile token missing, invalid, expired or already used (register, login, new complaint). */
+  CAPTCHA_REQUIRED: 403,
   NOT_FOUND: 404,
   CONFLICT: 409,
   PAYLOAD_TOO_LARGE: 413,

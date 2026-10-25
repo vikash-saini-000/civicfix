@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import type { AuthService } from '../auth/authService.js';
 import { requireAuth } from '../middleware/auth.js';
+import { disabledCaptcha, requireCaptcha, type CaptchaVerifier } from '../middleware/captcha.js';
 import { createRateLimiter, type RateLimitOptions } from '../middleware/rateLimit.js';
 import { input, validate } from '../middleware/validate.js';
 import { CATEGORIES, COMPLAINT_STATUSES, PRIORITIES } from '../models/enums.js';
@@ -90,6 +91,8 @@ export interface ComplaintsRouterDeps {
   createLimit?: RateLimitOptions;
   /** Per-admin limit on analysis re-runs (each may call the AI provider). */
   rerunLimit?: RateLimitOptions;
+  /** Turnstile check on new complaints. Default: disabled. */
+  captcha?: CaptchaVerifier;
 }
 
 export const DEFAULT_CREATE_LIMIT: RateLimitOptions = { windowMs: 60 * 60_000, limit: 20 };
@@ -103,6 +106,7 @@ export function complaintsRouter({
   workOrderService,
   createLimit = DEFAULT_CREATE_LIMIT,
   rerunLimit = DEFAULT_RERUN_LIMIT,
+  captcha = disabledCaptcha,
 }: ComplaintsRouterDeps): Router {
   const router = Router();
   router.use(requireAuth(authService));
@@ -112,6 +116,7 @@ export function complaintsRouter({
     '/',
     createRateLimiter({ ...createLimit, keyPart: (req) => req.auth?.userId }),
     validate({ body: createBody }),
+    requireCaptcha(captcha, 'complaint'),
     async (req, res) => {
       const complaint = await complaintService.create(req.auth!, input<CreateComplaintInput>(req, 'body'), req.id);
       sendCreated(res, { complaint }, `/api/v1/complaints/${complaint.publicId}`);

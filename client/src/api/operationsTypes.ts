@@ -118,6 +118,14 @@ export interface CapturePolicy {
   maxVideoSeconds: number;
   /** Whether the server issues camera-session tokens. */
   cameraSessions: boolean;
+  /** Files go straight to storage (Cloudinary) and are then attached by reference (hosting limits request size). */
+  directUpload?: boolean;
+}
+
+/** Something the browser can put in <img>/<video> src. Call release() when done. */
+export interface EvidenceSource {
+  url: string;
+  release(): void;
 }
 
 export interface CaptureSession {
@@ -267,6 +275,8 @@ export interface OperationsApi {
   listEvidence(publicId: string, signal?: AbortSignal): Promise<Evidence[]>;
   uploadEvidence(publicId: string, file: File, purpose: EvidencePurpose, caption?: string, signal?: AbortSignal): Promise<Evidence>;
   fetchEvidenceContent(evidenceId: string, signal?: AbortSignal): Promise<Blob>;
+  /** A signed storage link when the server offers one, otherwise the file bytes as an object URL. */
+  evidenceSource(evidenceId: string, signal?: AbortSignal): Promise<EvidenceSource>;
   getCapturePolicy(signal?: AbortSignal): Promise<CapturePolicy>;
   /** Street address, ward and nearest mapped place for a point. */
   describeLocation(lat: number, lng: number, signal?: AbortSignal): Promise<LocationDescription>;

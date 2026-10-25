@@ -15,6 +15,7 @@ export function createMockOperationsApi(): OperationsApi {
     listEvidence: () => Promise.resolve([]),
     uploadEvidence: unsupported,
     fetchEvidenceContent: unsupported,
+    evidenceSource: unsupported,
     describeLocation: () => Promise.resolve({ address: null, ward: null, nearestPlace: null, source: 'none' as const }),
     getCapturePolicy: () => Promise.resolve({ captureMode: 'any' as const, maxVideoSeconds: 60, cameraSessions: false }),
     startCaptureSession: () => Promise.resolve({ token: 'mock-camera-session', expiresAt: new Date(Date.now() + 1_800_000).toISOString(), captureMode: 'any' as const, maxVideoSeconds: 60 }),

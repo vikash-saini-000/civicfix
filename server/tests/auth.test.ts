@@ -466,3 +466,27 @@ describe('CORS for credentialed requests', () => {
     expect(res.headers['access-control-allow-origin']).toBeUndefined();
   });
 });
+
+describe('Turnstile on register and login', () => {
+  const verifier = { enabled: true, verify: async (token: string, _ip: string | undefined, action: string) => token === `ok-${action}` };
+  const guarded = makeApp({ captcha: verifier });
+  const post = (path: string, body: object, token?: string) => {
+    const r = request(guarded).post(path).set('Content-Type', 'application/json');
+    return (token ? r.set('X-Turnstile-Token', token) : r).send(JSON.stringify(body));
+  };
+
+  it('refuses register and login without a valid token for that action', async () => {
+    const body = { name: 'Asha', email: 'asha@example.com', password: PASSWORD };
+    expect((await post('/api/v1/auth/register', body)).body.error.code).toBe('CAPTCHA_REQUIRED');
+    expect((await post('/api/v1/auth/register', body, 'ok-login')).status).toBe(403);
+    expect(await User.countDocuments()).toBe(0);
+    expect((await post('/api/v1/auth/register', body, 'ok-register')).status).toBe(201);
+    expect((await post('/api/v1/auth/login', { email: body.email, password: PASSWORD })).status).toBe(403);
+    expect((await post('/api/v1/auth/login', { email: body.email, password: PASSWORD }, 'ok-login')).status).toBe(200);
+  });
+
+  it('validates the body before spending the token', async () => {
+    const res = await post('/api/v1/auth/register', { email: 'not-an-email' });
+    expect(res.body.error.code).toBe('VALIDATION_ERROR');
+  });
+});

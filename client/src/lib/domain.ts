@@ -102,6 +102,8 @@ export interface NewComplaintInput {
   landmark?: string;
   selectedCategory: CategoryId | null;
   photos: File[];
+  /** Cloudflare Turnstile token, when the human check is on. */
+  captchaToken?: string;
 }
 
 type Tone = 'gray' | 'blue' | 'cyan' | 'purple' | 'green' | 'yellow' | 'red';

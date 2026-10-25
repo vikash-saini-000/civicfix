@@ -307,6 +307,26 @@ export function createEvidenceService(deps: EvidenceServiceDeps) {
      * Videos (no copy is made) and files uploaded before this feature are served as stored.
      */
     async download(p: Principal, evidenceId: string, requestId: string, variant: DownloadVariant = 'auto') {
+      const f = await resolveDownload(p, evidenceId, requestId, variant);
+      const bytes = await storage.get(f.key);
+      return { bytes, contentType: f.contentType, variant: f.variant, filename: f.filename };
+    },
+
+    /**
+     * Same access rules and audit as download, but returns a short-lived signed link instead of bytes
+     * (storage that supports it, e.g. Cloudinary). Null when the storage can't sign links.
+     */
+    async link(p: Principal, evidenceId: string, requestId: string, variant: DownloadVariant = 'auto') {
+      if (!storage.signedUrl) return null;
+      const f = await resolveDownload(p, evidenceId, requestId, variant);
+      // Long enough to watch a video that keeps requesting parts of the file.
+      const ttlSeconds = 900;
+      return { url: storage.signedUrl(f.key, ttlSeconds), contentType: f.contentType, variant: f.variant, expiresAt: new Date(Date.now() + ttlSeconds * 1000).toISOString() };
+    },
+  };
+
+  /** Which stored copy this person may see, after the access check. Audits the access. */
+  async function resolveDownload(p: Principal, evidenceId: string, requestId: string, variant: DownloadVariant) {
       const ev = await Evidence.findById(evidenceId).lean();
       if (!ev) throw notFoundError('The file');
       const complaint = await Complaint.findById(ev.complaint).select('citizen department routingReview').lean();
@@ -327,7 +347,6 @@ export function createEvidenceService(deps: EvidenceServiceDeps) {
         } else if (r.state === 'PENDING') throw new AppError('CONFLICT', 'This file is still being prepared for sharing (faces and number plates are blurred first). Try again in a few seconds.');
         else throw new AppError('CONFLICT', 'This file could not be prepared for sharing.');
       }
-      const bytes = await storage.get(key);
       await auditUserAction({
         actor: p,
         action: served === 'ORIGINAL' && !uploader ? 'evidence.original_downloaded' : 'evidence.downloaded',
@@ -338,8 +357,7 @@ export function createEvidenceService(deps: EvidenceServiceDeps) {
       });
       // A video's shareable copy is re-encoded as MP4, so its type can differ from the original's.
       const contentType = served === 'SHARED' ? (r?.contentType ?? ev.contentType) : ev.contentType;
-      return { bytes, contentType, variant: served, filename: `${String(ev._id)}${served === 'SHARED' ? '-shared' : ''}.${EXTENSIONS[contentType] ?? 'bin'}` };
-    },
-  };
+      return { key, contentType, variant: served, filename: `${String(ev._id)}${served === 'SHARED' ? '-shared' : ''}.${EXTENSIONS[contentType] ?? 'bin'}` };
+  }
 }
 export type EvidenceService = ReturnType<typeof createEvidenceService>;

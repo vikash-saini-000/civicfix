@@ -246,15 +246,15 @@ function EvidencePreview({ evidence }: { evidence: Evidence }) {
 
   useEffect(() => {
     const controller = new AbortController();
-    let objectUrl: string | null = null;
+    let release: (() => void) | null = null;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const load = (attempt: number) => {
       api
-        .fetchEvidenceContent(evidence.id, controller.signal)
-        .then((blob) => {
-          if (controller.signal.aborted || typeof URL.createObjectURL !== 'function') return;
-          objectUrl = URL.createObjectURL(blob);
-          setUrl(objectUrl);
+        .evidenceSource(evidence.id, controller.signal)
+        .then((source) => {
+          if (controller.signal.aborted) return source.release();
+          release = source.release;
+          setUrl(source.url);
         })
         .catch((error) => {
           if (controller.signal.aborted) return;
@@ -269,7 +269,7 @@ function EvidencePreview({ evidence }: { evidence: Evidence }) {
     return () => {
       controller.abort();
       if (timer) clearTimeout(timer);
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
+      release?.();
     };
   }, [evidence.id]);
 

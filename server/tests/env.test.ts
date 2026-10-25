@@ -34,6 +34,7 @@ describe('loadConfig', () => {
       capture: { mode: 'camera', sessionTtlSeconds: 1800 },
       geocode: { provider: 'nominatim', url: 'https://nominatim.openstreetmap.org', userAgent: 'CivicFix/0.1 (civic complaint platform)' },
       verification: { autoApprove: false, disputeWindowDays: 14 },
+      captcha: { provider: 'disabled', secretKey: undefined, allowedHostnames: [] },
     });
   });
 

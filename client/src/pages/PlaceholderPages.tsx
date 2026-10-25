@@ -9,6 +9,7 @@ import { EmptyState } from '../components/Feedback';
 import { TextInput } from '../components/Field';
 import { Page } from '../components/Layout';
 import { Notification } from '../components/Notification';
+import { CAPTCHA_ENABLED, Turnstile, type TurnstileHandle } from '../components/Turnstile';
 import { useAuth } from '../auth/AuthContext';
 import { defaultPathForRole, ROLE_LABELS, safeInternalPath } from '../auth/navigation';
 
@@ -25,6 +26,8 @@ export function LoginPage() {
   const [failedAttempts, setFailedAttempts] = useState(0);
   const submitInFlight = useRef(false);
   const errorSummaryRef = useRef<HTMLDivElement>(null);
+  const turnstile = useRef<TurnstileHandle>(null);
+  const [captchaToken, setCaptchaToken] = useState<string | null>(null);
 
   useEffect(() => {
     if (failedAttempts > 0) errorSummaryRef.current?.focus();
@@ -49,11 +52,12 @@ export function LoginPage() {
 
     submitInFlight.current = true;
     try {
-      const user = await login({ email, password });
+      const user = await login({ email, password, captchaToken: captchaToken ?? undefined });
       const requestedDestination = new URLSearchParams(location.search).get('next');
       navigate(safeInternalPath(requestedDestination) ?? defaultPathForRole(user.role), { replace: true });
     } catch {
       // AuthContext exposes a safe, user-facing message. Credentials are never logged or echoed.
+      turnstile.current?.reset(); // tokens are single-use
     } finally {
       submitInFlight.current = false;
     }
@@ -116,7 +120,9 @@ export function LoginPage() {
               </button>
             </div>
 
-            <Button type="submit" disabled={isSubmitting}>
+            <Turnstile ref={turnstile} action="login" onToken={setCaptchaToken} />
+
+            <Button type="submit" disabled={isSubmitting || (CAPTCHA_ENABLED && !captchaToken)}>
               {isSubmitting ? 'Signing in…' : 'Sign in'}
             </Button>
             {API_MODE === 'http' && (

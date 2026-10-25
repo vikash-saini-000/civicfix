@@ -5,6 +5,7 @@ import { clearRefreshCookie, readRefreshCookie, setRefreshCookie } from '../auth
 import { PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH } from '../auth/password.js';
 import type { AuthConfig } from '../config/env.js';
 import { requireAuth, requireCsrfHeader } from '../middleware/auth.js';
+import { disabledCaptcha, requireCaptcha, type CaptchaVerifier } from '../middleware/captcha.js';
 import { createRateLimiter, type RateLimitOptions } from '../middleware/rateLimit.js';
 import { input, validate } from '../middleware/validate.js';
 import { AppError } from '../utils/errors.js';
@@ -41,12 +42,14 @@ export interface AuthRouterDeps {
   authConfig: AuthConfig;
   corsOrigins: string[];
   rateLimits?: AuthRateLimits;
+  /** Turnstile check on register and login. Default: disabled. */
+  captcha?: CaptchaVerifier;
 }
 
 const meta = (req: Request) => ({ requestId: req.id, userAgent: req.get('user-agent') });
 
 /** /api/v1/auth: register, login, refresh, logout, me. */
-export function authRouter({ authService, authConfig, corsOrigins, rateLimits = DEFAULT_AUTH_RATE_LIMITS }: AuthRouterDeps): Router {
+export function authRouter({ authService, authConfig, corsOrigins, rateLimits = DEFAULT_AUTH_RATE_LIMITS, captcha = disabledCaptcha }: AuthRouterDeps): Router {
   const router = Router();
   const csrf = requireCsrfHeader(corsOrigins);
   const emailKey = (req: Request) => (typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase().slice(0, 254) : undefined);
@@ -59,7 +62,7 @@ export function authRouter({ authService, authConfig, corsOrigins, rateLimits = 
     else sendSuccess(res, data);
   };
 
-  router.post('/register', createRateLimiter(rateLimits.register), validate({ body: registerBody }), async (req, res) => {
+  router.post('/register', createRateLimiter(rateLimits.register), validate({ body: registerBody }), requireCaptcha(captcha, 'register'), async (req, res) => {
     respondWithSession(res, await authService.register(input<RegisterBody>(req, 'body'), meta(req)), 201);
   });
 
@@ -68,6 +71,7 @@ export function authRouter({ authService, authConfig, corsOrigins, rateLimits = 
     createRateLimiter(rateLimits.loginPerIp),
     createRateLimiter({ ...rateLimits.loginPerIpAndEmail, keyPart: emailKey }),
     validate({ body: loginBody }),
+    requireCaptcha(captcha, 'login'),
     async (req, res) => {
       respondWithSession(res, await authService.login(input<LoginBody>(req, 'body'), meta(req)), 200);
     },

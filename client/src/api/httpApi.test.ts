@@ -46,6 +46,8 @@ function json(body: unknown, status = 200) {
 }
 
 const ok = (data: unknown, meta?: unknown) => json({ success: true, data, ...(meta ? { meta } : {}) });
+/** First evidence call asks the server which upload mode to use (cached afterwards). */
+const policy = (directUpload: boolean) => ok({ captureMode: 'any', maxVideoSeconds: 60, cameraSessions: true, directUpload });
 const fail = (status: number, code: string, message = 'Nope') => json({ success: false, error: { code, message, details: [] }, requestId: 'r1' }, status);
 const departments = () => ok([{ id: 'd1', name: 'Roads and Public Works', categories: ['roads'], isActive: true, description: null }], {
   pagination: { page: 1, limit: 100, total: 1, totalPages: 1, hasNextPage: false },
@@ -154,6 +156,7 @@ describe('HttpCivicFixApi', () => {
 
   it('checks each photo, creates the complaint, then uploads each photo as raw evidence', async () => {
     const fetchMock = vi.fn()
+      .mockResolvedValueOnce(policy(false))
       .mockResolvedValueOnce(ok({ allowed: true, message: null }))
       .mockResolvedValueOnce(json({ success: true, data: { complaint: { ...complaint, publicId: 'CF-2026-00420' } } }, 201))
       .mockResolvedValueOnce(json({ success: true, data: { evidence: { id: 'e1' } } }, 201));
@@ -169,15 +172,68 @@ describe('HttpCivicFixApi', () => {
       photos: [photo],
     });
     expect(created).toMatchObject({ publicId: 'CF-2026-00420', photoCount: 1 });
-    expect(fetchMock.mock.calls[0]![0]).toBe('/api/v1/evidence/check');
-    expect((fetchMock.mock.calls[0]![1] as RequestInit).body).toBe(photo);
-    expect(fetchMock.mock.calls[1]![1]).toMatchObject({
+    expect(fetchMock.mock.calls[0]![0]).toBe('/api/v1/evidence/capture-policy');
+    expect(fetchMock.mock.calls[1]![0]).toBe('/api/v1/evidence/check');
+    expect((fetchMock.mock.calls[1]![1] as RequestInit).body).toBe(photo);
+    expect(fetchMock.mock.calls[2]![1]).toMatchObject({
       method: 'POST',
       body: JSON.stringify({ title: 'Pothole', description: 'A deep pothole near the bus stop.', location: { lat: 13.0108, lng: 74.7943 }, selectedCategory: 'roads' }),
     });
-    expect(fetchMock.mock.calls[2]![0]).toBe('/api/v1/complaints/CF-2026-00420/evidence?purpose=COMPLAINT_REPORT');
-    expect(headerOf(fetchMock.mock.calls[2]!, 'Content-Type')).toBe('image/png');
-    expect((fetchMock.mock.calls[2]![1] as RequestInit).body).toBe(photo);
+    expect(fetchMock.mock.calls[3]![0]).toBe('/api/v1/complaints/CF-2026-00420/evidence?purpose=COMPLAINT_REPORT');
+    expect(headerOf(fetchMock.mock.calls[3]!, 'Content-Type')).toBe('image/png');
+    expect((fetchMock.mock.calls[3]![1] as RequestInit).body).toBe(photo);
+    expect(fetchMock).toHaveBeenCalledTimes(4); // the mode is asked once, not per file
+  });
+
+  it('uploads straight to Cloudinary when the server asks for it, reusing the checked file', async () => {
+    const ticket = { uploadUrl: 'https://api.cloudinary.com/v1_1/demo/image/upload', fields: { public_id: 'civicfix/staging/u1', signature: 'sig', api_key: '123' }, token: 'tok-1' };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(policy(true))
+      .mockResolvedValueOnce(json({ success: true, data: ticket }, 201))
+      .mockResolvedValueOnce(json({ format: 'png', public_id: 'civicfix/staging/u1' }))
+      .mockResolvedValueOnce(ok({ allowed: true, message: null }))
+      .mockResolvedValueOnce(json({ success: true, data: { complaint: { ...complaint, publicId: 'CF-2026-00421' } } }, 201))
+      .mockResolvedValueOnce(json({ success: true, data: { evidence: { id: 'e1' } } }, 201));
+    vi.stubGlobal('fetch', fetchMock);
+    const api = new HttpCivicFixApi({ baseUrl: '', timeoutMs: 1000 });
+    const photo = new File(['photo'], 'issue.png', { type: 'image/png' });
+
+    const created = await api.submitComplaint({ title: 'Pothole', description: 'A deep pothole near the bus stop.', location: { lat: 13.0108, lng: 74.7943 }, selectedCategory: 'roads', photos: [photo] });
+    expect(created).toMatchObject({ publicId: 'CF-2026-00421', photoCount: 1 });
+    const urls = fetchMock.mock.calls.map((c) => c[0]);
+    expect(urls).toEqual([
+      '/api/v1/evidence/capture-policy',
+      '/api/v1/evidence/uploads',
+      'https://api.cloudinary.com/v1_1/demo/image/upload',
+      '/api/v1/evidence/check-upload',
+      '/api/v1/complaints',
+      '/api/v1/complaints/CF-2026-00421/evidence/from-upload',
+    ]);
+    // The browser's storage upload carries the signed fields and the file, and no API credentials.
+    const storageCall = fetchMock.mock.calls[2]![1] as RequestInit;
+    const form = storageCall.body as FormData;
+    expect(form.get('signature')).toBe('sig');
+    expect(form.get('file')).toBeInstanceOf(File);
+    expect(storageCall.credentials).toBe('omit');
+    expect(storageCall.headers).toBeUndefined();
+    expect(JSON.parse((fetchMock.mock.calls[3]![1] as RequestInit).body as string)).toEqual({ token: 'tok-1', format: 'png' });
+    // The checked file is attached by reference, not uploaded a second time.
+    expect(JSON.parse((fetchMock.mock.calls[5]![1] as RequestInit).body as string)).toEqual({ token: 'tok-1', format: 'png', purpose: 'COMPLAINT_REPORT' });
+  });
+
+  it('refuses an upload ticket that does not point at Cloudinary', async () => {
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(policy(true))
+      .mockResolvedValueOnce(json({ success: true, data: { uploadUrl: 'https://evil.example/upload', fields: {}, token: 't' } }, 201)));
+    const api = new HttpCivicFixApi({ baseUrl: '', timeoutMs: 1000 });
+    await expect(api.uploadEvidence('CF-2026-00001', new File(['x'], 'a.jpg', { type: 'image/jpeg' }), 'RESOLUTION')).rejects.toMatchObject({ code: 'INVALID_RESPONSE' });
+  });
+
+  it('shows evidence through a signed link when the server offers one', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(ok({ link: { url: 'https://api.cloudinary.com/v1_1/demo/image/download?sig=1' } })));
+    const api = new HttpCivicFixApi({ baseUrl: '', timeoutMs: 1000 });
+    const source = await api.evidenceSource('e1');
+    expect(source.url).toBe('https://api.cloudinary.com/v1_1/demo/image/download?sig=1');
   });
 
   it('sends the in-app camera stamp with a captured file', async () => {
@@ -188,18 +244,18 @@ describe('HttpCivicFixApi', () => {
     tagCapture(photo, { token: 'tok', capturedAt: '2026-10-25T10:00:00.000Z', lat: 13.0077, lng: 74.7947, accuracy: 6.2 });
 
     await api.uploadEvidence('CF-2026-00001', photo, 'RESOLUTION');
-    const call = fetchMock.mock.calls[0]!;
+    const call = fetchMock.mock.calls[1]!; // [0] asked for the upload mode
     expect(headerOf(call, 'X-Capture-Token')).toBe('tok');
     expect(headerOf(call, 'X-Captured-At')).toBe('2026-10-25T10:00:00.000Z');
     expect(headerOf(call, 'X-Capture-Lat')).toBe('13.0077');
     expect(headerOf(call, 'X-Capture-Accuracy')).toBe('6');
 
     await api.uploadEvidence('CF-2026-00001', new File(['jpeg'], 'gallery.jpg', { type: 'image/jpeg' }), 'RESOLUTION');
-    expect(headerOf(fetchMock.mock.calls[1]!, 'X-Capture-Token')).toBeNull();
+    expect(headerOf(fetchMock.mock.calls[2]!, 'X-Capture-Token')).toBeNull();
   });
 
   it('does not create the complaint when a photo looks AI-generated or edited', async () => {
-    const fetchMock = vi.fn().mockResolvedValueOnce(ok({ allowed: false, message: 'This file looks AI-generated or edited, so it was not accepted.' }));
+    const fetchMock = vi.fn().mockResolvedValueOnce(policy(false)).mockResolvedValueOnce(ok({ allowed: false, message: 'This file looks AI-generated or edited, so it was not accepted.' }));
     vi.stubGlobal('fetch', fetchMock);
     const api = new HttpCivicFixApi({ baseUrl: '', timeoutMs: 1000 });
 
@@ -210,11 +266,12 @@ describe('HttpCivicFixApi', () => {
       selectedCategory: 'roads',
       photos: [new File(['x'], 'fake.jpg', { type: 'image/jpeg' })],
     })).rejects.toMatchObject({ status: 422, code: 'MEDIA_REJECTED', message: expect.stringContaining('"fake.jpg"') });
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2); // mode + check; the complaint was never created
   });
 
   it('keeps the complaint when a photo upload fails and reports how many failed', async () => {
     vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(policy(false))
       .mockResolvedValueOnce(ok({ allowed: true, message: null }))
       .mockResolvedValueOnce(json({ success: true, data: { complaint } }, 201))
       .mockResolvedValueOnce(fail(503, 'SERVICE_UNAVAILABLE')));

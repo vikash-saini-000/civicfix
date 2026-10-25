@@ -13,6 +13,7 @@ import { sendCreated, sendSuccess } from '../utils/respond.js';
 import { AppError } from '../utils/errors.js';
 import { complaintPublicId, objectId, text } from '../validation/common.js';
 import { paginationQuery } from '../validation/pagination.js';
+import type { DirectUploads, StagedFile } from '../storage/cloudinary.js';
 
 const complaintParams = z.strictObject({ publicId: complaintPublicId });
 const idParams = z.strictObject({ id: objectId });
@@ -41,7 +42,7 @@ function captureHeaders(req: express.Request): CaptureStampInput | undefined {
  * image/webp | video/mp4), so it is mounted before the JSON-only check. Size is capped while
  * reading; type and size are re-checked from the bytes in the service.
  */
-export function evidenceUploadRouter(deps: { authService: AuthService; evidenceService: EvidenceService; uploadLimit?: RateLimitOptions }): Router {
+export function evidenceUploadRouter(deps: { authService: AuthService; evidenceService: EvidenceService; uploadLimit?: RateLimitOptions; directUploads?: boolean }): Router {
   const router = Router();
   router.post(
     '/complaints/:publicId/evidence',
@@ -80,7 +81,8 @@ export function evidenceUploadRouter(deps: { authService: AuthService; evidenceS
   );
   // Capture rules for the app (camera only or gallery allowed, longest video).
   router.get('/evidence/capture-policy', requireAuth(deps.authService), (_req, res) => {
-    sendSuccess(res, deps.evidenceService.capturePolicy());
+    // directUpload: the app must upload files straight to storage (POST /evidence/uploads) instead of to this API.
+    sendSuccess(res, { ...deps.evidenceService.capturePolicy(), directUpload: deps.directUploads === true });
   });
   // Opens an in-app camera session. No body.
   router.post(
@@ -109,9 +111,29 @@ const csv = <T extends readonly [string, ...string[]]>(v: T) => z.string().max(2
 const disputeList = paginationQuery.extend({ scope: z.enum(['mine', 'department', 'all']).default('mine'), status: csv(DISPUTE_STATUSES).optional() });
 const empty = z.strictObject({});
 const downloadQuery = z.strictObject({ variant: z.enum(['auto', 'shared', 'original']).default('auto') });
+const signUploadBody = z.strictObject({ kind: z.enum(['image', 'video']) });
+// A file the browser already uploaded to staging storage: the token from POST /evidence/uploads plus
+// the format the storage reported (e.g. "jpg").
+const stagedRef = { token: z.string().min(10).max(1000), format: z.string().trim().toLowerCase().regex(/^[a-z0-9]{2,5}$/, 'Must be a file format like jpg.') };
+const checkUploadBody = z.strictObject(stagedRef);
+const attachUploadBody = z.strictObject({ ...stagedRef, purpose: z.enum(EVIDENCE_PURPOSES), caption: text(1, 300).optional(), disputeId: objectId.optional() });
+
+/** A staged file is kept only when the failure was temporary (5xx), so the citizen can retry without re-uploading. */
+async function discardUnlessTransient(du: DirectUploads, staged: StagedFile, err?: unknown) {
+  if (err instanceof AppError && err.status >= 500) return;
+  if (err && !(err instanceof AppError)) return;
+  await du.discardStaged(staged).catch(() => undefined);
+}
 
 /** Evidence reads, resolution, verification, disputes, closing and feedback (JSON bodies). */
-export function resolutionRouter(deps: { authService: AuthService; evidenceService: EvidenceService; resolutionService: ResolutionService }): Router {
+export function resolutionRouter(deps: {
+  authService: AuthService;
+  evidenceService: EvidenceService;
+  resolutionService: ResolutionService;
+  /** Browser-to-storage uploads (Cloudinary). Off = files are uploaded to the API itself. */
+  directUploads?: DirectUploads;
+  uploadLimit?: RateLimitOptions;
+}): Router {
   const router = Router();
   const auth = requireAuth(deps.authService);
   const ev = deps.evidenceService;
@@ -121,6 +143,60 @@ export function resolutionRouter(deps: { authService: AuthService; evidenceServi
 
   router.get('/complaints/:publicId/evidence', auth, validate({ params: complaintParams }), async (req, res) => {
     sendSuccess(res, await ev.list(req.auth!, input<CP>(req, 'params').publicId));
+  });
+
+  if (deps.directUploads) {
+    const du = deps.directUploads;
+    const limit = (prefix: string) => createRateLimiter({ ...(deps.uploadLimit ?? DEFAULT_UPLOAD_LIMIT), keyPart: (req) => `${prefix}:${req.auth?.userId}` });
+
+    // Signature for one browser upload into staging storage. The file only counts once attached below.
+    router.post('/evidence/uploads', auth, limit('sign'), validate({ body: signUploadBody }), (req, res) => {
+      res.setHeader('Cache-Control', 'no-store');
+      sendCreated(res, du.sign(req.auth!.userId, input<z.infer<typeof signUploadBody>>(req, 'body').kind), '/api/v1/evidence/check-upload');
+    });
+
+    // Same as POST /evidence/check, for a staged file. A refused file is deleted from staging.
+    router.post('/evidence/check-upload', auth, limit('check'), validate({ body: checkUploadBody }), async (req, res) => {
+      const b = input<z.infer<typeof checkUploadBody>>(req, 'body');
+      const staged = await du.fetchStaged(req.auth!.userId, b.token, b.format);
+      let result;
+      try {
+        result = await ev.precheck(req.auth!, staged.bytes, staged.declaredType, req.id, captureHeaders(req));
+      } catch (err) {
+        await discardUnlessTransient(du, staged, err);
+        throw err;
+      }
+      if (!result.allowed) await du.discardStaged(staged).catch(() => undefined);
+      sendSuccess(res, result);
+    });
+
+    // Same as POST /complaints/:publicId/evidence, for a staged file: every check runs again on the bytes.
+    router.post('/complaints/:publicId/evidence/from-upload', auth, limit('upload'), validate({ params: complaintParams, body: attachUploadBody }), async (req, res) => {
+      const b = input<z.infer<typeof attachUploadBody>>(req, 'body');
+      const staged = await du.fetchStaged(req.auth!.userId, b.token, b.format);
+      let evidence;
+      try {
+        evidence = await ev.upload(
+          req.auth!,
+          input<CP>(req, 'params').publicId,
+          { purpose: b.purpose, caption: b.caption, disputeId: b.disputeId, bytes: staged.bytes, declaredType: staged.declaredType, capture: captureHeaders(req) },
+          req.id,
+        );
+      } catch (err) {
+        await discardUnlessTransient(du, staged, err);
+        throw err;
+      }
+      // Stored under its own key now; the staged copy is no longer needed.
+      await du.discardStaged(staged).catch(() => undefined);
+      sendCreated(res, { evidence }, evidence.contentUrl);
+    });
+  }
+
+  // Short-lived signed link to the file (same access rules and audit as /content). link = null when the
+  // storage can't sign links; use /content then.
+  router.get('/evidence/:id/link', auth, validate({ params: idParams, query: downloadQuery }), async (req, res) => {
+    res.setHeader('Cache-Control', 'private, no-store');
+    sendSuccess(res, { link: await ev.link(req.auth!, input<IP>(req, 'params').id, req.id, input<z.infer<typeof downloadQuery>>(req, 'query').variant) });
   });
 
   router.get('/evidence/:id/content', auth, validate({ params: idParams, query: downloadQuery }), async (req, res) => {
