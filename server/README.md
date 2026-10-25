@@ -60,7 +60,10 @@ npm run dev               # tsx watch, http://localhost:4000
 | `FFMPEG_PATH` / `FFPROBE_PATH` | `ffmpeg` / `ffprobe` | Video tools (frames, details, privacy copies, WebM → MP4) |
 | `MAX_VIDEO_SECONDS` | `60` | Longest accepted video (5–300) |
 | `GEOCODER` / `GEOCODER_URL` / `GEOCODER_USER_AGENT` | `nominatim` (`disabled` in tests) / public OpenStreetMap server / `CivicFix/0.1 (…)` | Street addresses for map points (`GET /api/v1/geo/reverse`, and saved on each new complaint as `address`). Server-side, cached per ~11 m, at most 1 request/s per the Nominatim usage policy. `disabled` = ward and nearest mapped place only. |
-| `STORAGE_PROVIDER` / `STORAGE_LOCAL_DIR` | `disabled` / `./uploads` | Evidence file storage: `disabled` (uploads return 503) or `local` |
+| `STORAGE_PROVIDER` / `STORAGE_LOCAL_DIR` | `disabled` / `./uploads` | Evidence file storage: `disabled` (uploads return 503), `local`, or `cloudinary` (production; required on Vercel) |
+| `CLOUDINARY_URL` (or `CLOUDINARY_CLOUD_NAME` / `CLOUDINARY_API_KEY` / `CLOUDINARY_API_SECRET`) / `CLOUDINARY_FOLDER` | — / `civicfix` | Required with `STORAGE_PROVIDER=cloudinary`. Files are private ("authenticated") assets. Browsers upload directly to a staging folder (`POST /evidence/uploads`), the API re-checks and stores each file, and viewers get 15-minute signed links (`GET /evidence/:id/link`). |
+| `CRON_SECRET` | — | Enables `GET /api/v1/internal/maintenance` (Vercel Cron, `Authorization: Bearer …`): leftover jobs, SLA breaches, staged-upload cleanup. 32+ characters. |
+| `CAPTCHA_PROVIDER` / `TURNSTILE_SECRET_KEY` / `TURNSTILE_HOSTNAMES` | `disabled` / — / any | `turnstile` = register, login and new complaints need a Cloudflare Turnstile token (header `X-Turnstile-Token`), checked with Siteverify. Hostnames restrict where the token may come from. |
 | `AUTO_APPROVE_RESOLUTIONS` | `false` | Approve fully clean resolutions without a human (product-owner decision) |
 | `DISPUTE_WINDOW_DAYS` | `14` | Days after resolution in which citizens may dispute (1–90) |
 | `TRUST_PROXY` | `0` | Number of reverse proxies in front of the API (0–10). Set it when deployed behind one, so client IPs and rate limits are correct. |

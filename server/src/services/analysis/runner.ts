@@ -632,6 +632,25 @@ export function createAnalysisRunner(opts: RunnerOptions) {
     }
   }
 
+  let quietRun: Promise<void> | null = null;
+  async function quietLoop(deadline: number, maxWaitMs: number) {
+    const margin = 5_000;
+    try {
+      while (!stopping && Date.now() < deadline - margin) {
+        // Let workers started during the request finish first.
+        while (running.size) await Promise.allSettled([...running]);
+        while (!stopping && Date.now() < deadline - margin && (await processOne()));
+        const next = await AIAnalysis.findOne({ analysisType: { $in: RUNNABLE_TYPES }, status: 'PENDING' }).sort({ nextAttemptAt: 1 }).select('nextAttemptAt').lean();
+        if (!next?.nextAttemptAt) return;
+        const wait = next.nextAttemptAt.getTime() - Date.now();
+        if (wait > Math.min(maxWaitMs, deadline - margin - Date.now())) return;
+        if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+      }
+    } catch (err) {
+      logger.error({ err: safeError(err) }, 'analysis run-until-quiet failed');
+    }
+  }
+
   /** Starts workers up to the concurrency limit. Never throws; never blocks the caller. */
   function kick() {
     if (!opts.autoRun || stopping) return;
@@ -672,6 +691,19 @@ export function createAnalysisRunner(opts: RunnerOptions) {
     },
     setEventBus(bus: EventBus) {
       events = bus;
+    },
+    /**
+     * For serverless hosts (Vercel), where nothing runs between requests: processes due jobs until
+     * none are left, also waiting for jobs that become due soon (retries, deferred jobs), and stops
+     * before `deadline` (epoch ms). Anything left is picked up by the next request or the daily cron.
+     * Never throws.
+     */
+    runUntilQuiet(deadline: number, maxWaitMs = 20_000): Promise<void> {
+      // One loop per instance: concurrent requests share it instead of each starting their own.
+      quietRun ??= quietLoop(deadline, maxWaitMs).finally(() => {
+        quietRun = null;
+      });
+      return quietRun;
     },
     /** Processes due jobs until none are left (tests and scripts). */
     async drain(maxJobs = 100) {

@@ -137,6 +137,7 @@ function getRegisterErrorMessage(error: unknown): string {
 }
 
 function getAuthActionErrorMessage(error: unknown, fallback = 'We could not sign you in. Please try again.'): string {
+  if (error instanceof ApiError && error.code === 'CAPTCHA_REQUIRED') return 'The human check failed or expired. Complete it again and retry.';
   if (error instanceof ApiError && (error.status === 401 || error.status === 403)) {
     return 'The email or password is incorrect.';
   }

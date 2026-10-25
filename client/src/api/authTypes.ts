@@ -19,6 +19,8 @@ export interface AuthUser {
 export interface LoginCredentials {
   email: string;
   password: string;
+  /** Cloudflare Turnstile token, when the human check is on. Sent as a header, not in the body. */
+  captchaToken?: string;
 }
 
 export interface AuthSession {
@@ -29,6 +31,8 @@ export interface RegisterInput {
   name: string;
   email: string;
   password: string;
+  /** Cloudflare Turnstile token, when the human check is on. */
+  captchaToken?: string;
 }
 
 export interface AuthApi {

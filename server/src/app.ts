@@ -17,8 +17,11 @@ import { buildApi } from './routes/api.js';
 import { setAuditLogger } from './services/audit.js';
 import type { VerificationPolicy } from './services/resolution.js';
 import type { ObjectStorage } from './storage/index.js';
+import type { DirectUploads } from './storage/cloudinary.js';
+import { createHash, timingSafeEqual } from 'node:crypto';
 import type { AuthRateLimits } from './routes/auth.js';
 import type { RateLimitOptions } from './middleware/rateLimit.js';
+import type { CaptchaVerifier } from './middleware/captcha.js';
 import { healthRouter, type HealthDeps } from './routes/health.js';
 import { AppError } from './utils/errors.js';
 import type { Logger } from './utils/logger.js';
@@ -54,6 +57,12 @@ export interface AppDeps extends HealthDeps {
   /** Street addresses for map points (GEOCODER). Default: disabled. */
   geocoder?: Geocoder;
   uploadLimit?: RateLimitOptions;
+  /** Turnstile check on register, login and new complaints. Default: disabled. */
+  captcha?: CaptchaVerifier;
+  /** Browser-to-Cloudinary uploads (Vercel's 4.5 MB request limit). Default: off, files go through the API. */
+  directUploads?: DirectUploads;
+  /** GET /api/v1/internal/maintenance, called by Vercel Cron with "Authorization: Bearer <secret>". */
+  maintenance?: { secret: string; run: (deadline: number) => Promise<Record<string, unknown>> };
 }
 
 /**
@@ -125,7 +134,21 @@ export function createApp(deps: AppDeps): Express {
         capture: deps.capture,
         geocoder: deps.geocoder,
         uploadLimit: deps.uploadLimit,
+        captcha: deps.captcha,
+        directUploads: deps.directUploads,
       });
+  if (deps.maintenance) {
+    const { secret, run } = deps.maintenance;
+    const expected = createHash('sha256').update(`Bearer ${secret}`).digest();
+    api.get('/internal/maintenance', async (req, res) => {
+      const given = createHash('sha256').update(req.get('authorization') ?? '').digest();
+      if (!timingSafeEqual(given, expected)) throw new AppError('UNAUTHENTICATED', 'Missing or invalid maintenance credentials.');
+      // Stay well inside the function's time limit (vercel.json maxDuration: 300 s).
+      const result = await run(Date.now() + 240_000);
+      res.setHeader('Cache-Control', 'no-store');
+      res.json({ success: true, data: result });
+    });
+  }
   if (routers.uploads) api.use(routers.uploads);
   api.use(requireJson);
   api.use(routers.router);

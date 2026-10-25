@@ -17,6 +17,7 @@ import { createUserService } from '../services/users.js';
 import { createWorkOrderService, type AssignmentPolicy } from '../services/workOrders.js';
 import { disabledStorage, type ObjectStorage } from '../storage/index.js';
 import type { Logger } from '../utils/logger.js';
+import type { DirectUploads } from '../storage/cloudinary.js';
 import { safeError } from '../config/database.js';
 import { authRouter, type AuthRouterDeps } from './auth.js';
 import { complaintsRouter } from './complaints.js';
@@ -46,6 +47,8 @@ export type ApiDeps = AuthRouterDeps & {
   capture?: { mode: 'camera' | 'any'; sessionTtlSeconds: number };
   /** Street addresses for map points. Default: disabled (ward and nearby place only). */
   geocoder?: Geocoder;
+  /** Browser-to-Cloudinary uploads. Default: off. */
+  directUploads?: DirectUploads;
 };
 
 /**
@@ -101,10 +104,10 @@ export function buildApi(deps: ApiDeps): { router: Router; uploads: Router } {
   router.use('/users', usersRouter({ authService, userService: createUserService(authService) }));
   router.use('/departments', departmentsRouter({ authService, departmentService: createDepartmentService(), membershipService: createMembershipService() }));
   // Resolution routes share the /complaints and /work-orders prefixes, so they go first.
-  router.use(resolutionRouter({ authService, evidenceService, resolutionService }));
+  router.use(resolutionRouter({ authService, evidenceService, resolutionService, directUploads: deps.directUploads, uploadLimit: deps.uploadLimit }));
   router.use(
     '/complaints',
-    complaintsRouter({ authService, complaintService, analysisService, workOrderService, createLimit: deps.complaintCreateLimit, rerunLimit: deps.analysisRerunLimit }),
+    complaintsRouter({ authService, complaintService, analysisService, workOrderService, createLimit: deps.complaintCreateLimit, rerunLimit: deps.analysisRerunLimit, captcha: deps.captcha }),
   );
   router.use('/work-orders', workOrdersRouter({ authService, workOrderService }));
   router.use('/assignments', assignmentsRouter({ authService, workOrderService }));
@@ -114,7 +117,7 @@ export function buildApi(deps: ApiDeps): { router: Router; uploads: Router } {
   router.use('/analytics', analyticsRouter({ authService, analyticsService: createAnalyticsService() }));
   router.use('/geo', geoRouter({ authService, geocoder: deps.geocoder }));
 
-  const uploads = evidenceUploadRouter({ authService, evidenceService, uploadLimit: deps.uploadLimit });
+  const uploads = evidenceUploadRouter({ authService, evidenceService, uploadLimit: deps.uploadLimit, directUploads: !!deps.directUploads });
   return { router, uploads };
 }
 

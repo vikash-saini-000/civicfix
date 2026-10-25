@@ -9,6 +9,7 @@ import { EmptyState } from '../components/Feedback';
 import { Checkbox, TextInput } from '../components/Field';
 import { Page } from '../components/Layout';
 import { Notification } from '../components/Notification';
+import { CAPTCHA_ENABLED, Turnstile, type TurnstileHandle } from '../components/Turnstile';
 import { cx } from '../lib/cx';
 import {
   EMAIL_MAX,
@@ -53,6 +54,8 @@ export function RegisterPage() {
   const [emailTaken, setEmailTaken] = useState(false);
   const [attempt, setAttempt] = useState(0);
   const submitInFlight = useRef(false);
+  const turnstile = useRef<TurnstileHandle>(null);
+  const [captchaToken, setCaptchaToken] = useState<string | null>(null);
   const summaryRef = useRef<HTMLDivElement>(null);
   const refs = {
     name: useRef<HTMLInputElement>(null),
@@ -120,12 +123,13 @@ export function RegisterPage() {
     submitInFlight.current = true;
     try {
       // Only the three fields the backend accepts. Consent is recorded by the act of signing up.
-      const user = await register({ name: name.trim(), email: normalizeEmail(email), password });
+      const user = await register({ name: name.trim(), email: normalizeEmail(email), password, captchaToken: captchaToken ?? undefined });
       const destination = next && next.startsWith('/citizen') ? next : defaultPathForRole(user.role);
       navigate(destination, { replace: true, state: { welcome: true } });
     } catch (error) {
       handleServerError(error);
       setAttempt((value) => value + 1);
+      turnstile.current?.reset(); // tokens are single-use
     } finally {
       submitInFlight.current = false;
     }
@@ -143,6 +147,10 @@ export function RegisterPage() {
         setErrors(fields);
         return;
       }
+    }
+    if (error instanceof ApiError && error.code === 'CAPTCHA_REQUIRED') {
+      setFormError('The human check failed or expired. Complete it again and retry.');
+      return;
     }
     if (error instanceof ApiError && error.status === 429) {
       setFormError('Too many accounts were created from this network recently. Please wait a while and try again.');
@@ -294,7 +302,9 @@ export function RegisterPage() {
               />
             </div>
 
-            <Button type="submit" disabled={isSubmitting} className="w-full" aria-live="polite">
+            <Turnstile ref={turnstile} action="register" onToken={setCaptchaToken} />
+
+            <Button type="submit" disabled={isSubmitting || (CAPTCHA_ENABLED && !captchaToken)} className="w-full" aria-live="polite">
               {isSubmitting ? (
                 <>
                   <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" aria-hidden="true" />

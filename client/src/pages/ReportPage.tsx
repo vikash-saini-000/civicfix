@@ -11,6 +11,7 @@ import { Page } from '../components/Layout';
 import { LocationPicker } from '../components/LocationPicker';
 import { Notification } from '../components/Notification';
 import { MAX_PHOTOS, PhotoInput } from '../components/PhotoInput';
+import { CAPTCHA_ENABLED, Turnstile, type TurnstileHandle } from '../components/Turnstile';
 import { mediaFileError } from '../lib/media';
 import { CATEGORIES, isValidGeoPoint, type CategoryId, type GeoPoint } from '../lib/domain';
 
@@ -27,6 +28,8 @@ interface ReportPageProps {
 export function ReportPage({ complaintApi = api }: ReportPageProps) {
   const navigate = useNavigate();
   const [step, setStep] = useState<FormStep>('details');
+  const turnstile = useRef<TurnstileHandle>(null);
+  const [captchaToken, setCaptchaToken] = useState<string | null>(null);
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [category, setCategory] = useState<CategoryId | ''>('');
@@ -94,11 +97,13 @@ export function ReportPage({ complaintApi = api }: ReportPageProps) {
         landmark: landmark.trim() || undefined,
         selectedCategory: category || null,
         photos: photoAttachmentsSupported ? photos : [],
+        captchaToken: captchaToken ?? undefined,
       });
       navigate(`/citizen/complaints/${created.publicId}`, {
         state: { justSubmitted: true, photoUploadFailures: created.photoUploadFailures ?? 0 },
       });
     } catch (error) {
+      turnstile.current?.reset(); // tokens are single-use
       if (error instanceof ApiError && error.code === 'MEDIA_REJECTED') {
         // Nothing was saved: send the citizen back to swap the photo.
         setErrors((current) => ({ ...current, photos: error.message }));
@@ -274,11 +279,12 @@ export function ReportPage({ complaintApi = api }: ReportPageProps) {
                   {landmark.trim() && <><dt className="text-ink-muted">Landmark</dt><dd>{landmark.trim()}</dd></>}
                   <dt className="text-ink-muted">Photos</dt><dd>{photos.length || 'None'}</dd>
                 </dl>
+                <Turnstile ref={turnstile} action="complaint" onToken={setCaptchaToken} />
                 <div className="flex flex-wrap gap-4">
                   <Button type="button" variant="tertiary" onClick={() => setStep('details')} disabled={submitting}>
                     Edit details
                   </Button>
-                  <Button type="submit" disabled={submitting} className="min-w-48">
+                  <Button type="submit" disabled={submitting || (CAPTCHA_ENABLED && !captchaToken)} className="min-w-48">
                     {submitting ? 'Sending…' : 'Submit complaint'}
                   </Button>
                 </div>
@@ -305,6 +311,9 @@ export function ReportPage({ complaintApi = api }: ReportPageProps) {
 }
 
 function getSubmissionErrorMessage(error: unknown): string {
+  if (error instanceof ApiError && error.code === 'CAPTCHA_REQUIRED') {
+    return 'The human check failed or expired. Complete it again, then submit.';
+  }
   if (error instanceof ApiError && (error.status === 0 || error.status === 408)) {
     return 'Your report was not sent. Check your connection and try again.';
   }

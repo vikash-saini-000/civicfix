@@ -27,13 +27,27 @@ export interface Config {
   capture: CaptureConfig;
   geocode: GeocodeConfig;
   verification: VerificationConfig;
+  captcha: CaptchaConfig;
+  /** Bearer secret for the Vercel Cron maintenance endpoint. Unset = endpoint disabled. */
+  cronSecret?: string;
 }
 
-export const STORAGE_PROVIDERS = ['disabled', 'local'] as const;
+export const STORAGE_PROVIDERS = ['disabled', 'local', 'cloudinary'] as const;
 export interface StorageConfig {
   provider: (typeof STORAGE_PROVIDERS)[number];
   /** Directory for STORAGE_PROVIDER=local. */
   localDir: string;
+  /** Cloudinary account for STORAGE_PROVIDER=cloudinary. Files are stored as "authenticated" (never public). */
+  cloudinary?: { cloudName: string; apiKey: string; apiSecret: string; folder: string };
+}
+
+export const CAPTCHA_PROVIDERS = ['disabled', 'turnstile'] as const;
+export interface CaptchaConfig {
+  /** turnstile = register, login and new complaints need a Cloudflare Turnstile token checked server-side. */
+  provider: (typeof CAPTCHA_PROVIDERS)[number];
+  secretKey?: string;
+  /** Hostnames the widget may run on; tokens from anywhere else are refused. Empty = any. */
+  allowedHostnames: string[];
 }
 
 export interface CaptureConfig {
@@ -236,6 +250,37 @@ export function loadConfig(env: Env = process.env): Config {
   const storageProvider = (read('STORAGE_PROVIDER') ?? 'disabled') as StorageConfig['provider'];
   if (!STORAGE_PROVIDERS.includes(storageProvider)) issues.push(`STORAGE_PROVIDER must be one of ${STORAGE_PROVIDERS.join(', ')}`);
   const storageLocalDir = read('STORAGE_LOCAL_DIR') ?? './uploads';
+  let cloudinary: StorageConfig['cloudinary'];
+  if (storageProvider === 'cloudinary') {
+    // CLOUDINARY_URL (cloudinary://<api_key>:<api_secret>@<cloud_name>, as shown on the Cloudinary dashboard)
+    // or the three separate variables.
+    let cloudName = read('CLOUDINARY_CLOUD_NAME') ?? '';
+    let apiKey = read('CLOUDINARY_API_KEY') ?? '';
+    let apiSecret = read('CLOUDINARY_API_SECRET') ?? '';
+    const url = read('CLOUDINARY_URL');
+    if (url) {
+      const m = /^cloudinary:\/\/([^:@\s]+):([^@\s]+)@([a-z0-9_-]+)\/?$/i.exec(url);
+      if (!m) issues.push('CLOUDINARY_URL must look like cloudinary://<api_key>:<api_secret>@<cloud_name>');
+      else [, apiKey, apiSecret, cloudName] = m as unknown as [string, string, string, string];
+    }
+    if (!/^[a-z0-9_-]{1,64}$/i.test(cloudName)) issues.push('CLOUDINARY_CLOUD_NAME (or CLOUDINARY_URL) is required when STORAGE_PROVIDER=cloudinary');
+    if (!/^\d{6,20}$/.test(apiKey)) issues.push('CLOUDINARY_API_KEY (or CLOUDINARY_URL) is required when STORAGE_PROVIDER=cloudinary');
+    if (apiSecret.length < 10) issues.push('CLOUDINARY_API_SECRET (or CLOUDINARY_URL) is required when STORAGE_PROVIDER=cloudinary');
+    const folder = read('CLOUDINARY_FOLDER') ?? 'civicfix';
+    if (!/^[a-z0-9][a-z0-9_-]{0,31}$/.test(folder)) issues.push('CLOUDINARY_FOLDER must be 1-32 lower-case letters, digits, hyphens or underscores');
+    cloudinary = { cloudName, apiKey, apiSecret, folder };
+  }
+
+  // Vercel Cron sends "Authorization: Bearer <CRON_SECRET>" to the daily maintenance endpoint.
+  const cronSecret = read('CRON_SECRET');
+  if (cronSecret !== undefined && (cronSecret.length < 32 || WEAK_SECRET.test(cronSecret))) issues.push('CRON_SECRET must be at least 32 random characters');
+
+  const captchaProvider = (read('CAPTCHA_PROVIDER') ?? 'disabled') as CaptchaConfig['provider'];
+  if (!CAPTCHA_PROVIDERS.includes(captchaProvider)) issues.push(`CAPTCHA_PROVIDER must be one of ${CAPTCHA_PROVIDERS.join(', ')}`);
+  const turnstileSecret = read('TURNSTILE_SECRET_KEY');
+  if (captchaProvider === 'turnstile' && !turnstileSecret) issues.push('TURNSTILE_SECRET_KEY is required when CAPTCHA_PROVIDER=turnstile');
+  const captchaHostnames = (read('TURNSTILE_HOSTNAMES') ?? '').split(',').map((h) => h.trim().toLowerCase()).filter(Boolean);
+  if (captchaHostnames.some((h) => !/^[a-z0-9.-]+$/.test(h))) issues.push('TURNSTILE_HOSTNAMES must be comma-separated hostnames like civicfix.pages.dev (no scheme or path)');
   const mediaUploadGate = (read('MEDIA_UPLOAD_GATE') ?? 'block') as MediaUploadGate;
   if (!MEDIA_UPLOAD_GATES.includes(mediaUploadGate)) issues.push(`MEDIA_UPLOAD_GATE must be one of ${MEDIA_UPLOAD_GATES.join(', ')}`);
   const ffmpegPath = read('FFMPEG_PATH') ?? 'ffmpeg';
@@ -283,7 +328,9 @@ export function loadConfig(env: Env = process.env): Config {
       agentMaxTurns: aiAgentMaxTurns,
       embeddingModel,
     },
-    storage: { provider: storageProvider, localDir: storageLocalDir },
+    storage: { provider: storageProvider, localDir: storageLocalDir, cloudinary },
+    cronSecret,
+    captcha: { provider: captchaProvider, secretKey: turnstileSecret, allowedHostnames: captchaHostnames },
     video: { ffmpegPath, ffprobePath, maxSeconds: maxVideoSeconds },
     capture: { mode: captureMode, sessionTtlSeconds: captureSessionTtlSeconds },
     geocode: { provider: geocoder, url: geocoderUrl, userAgent: geocoderUserAgent },

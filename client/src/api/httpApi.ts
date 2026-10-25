@@ -13,6 +13,7 @@ import type {
   ComplaintAnalysis,
   CapturePolicy,
   CaptureSession,
+  EvidenceSource,
   LocationDescription,
   Department,
   DepartmentMember,
@@ -32,6 +33,18 @@ import type { CivicFixApi, PlatformComplaint, StaffComplaint } from './types';
 
 /** Uploads and pre-checks include the server's AI/ffmpeg checks, which can take a while (videos especially). */
 const UPLOAD_TIMEOUT_MS = 180_000;
+
+/** A file the browser already uploaded to staging storage (direct-upload mode). */
+interface StagedRef {
+  token: string;
+  format: string;
+}
+
+interface UploadTicket {
+  uploadUrl: string;
+  fields: Record<string, string>;
+  token: string;
+}
 
 export interface HttpApiOptions {
   baseUrl: string;
@@ -65,6 +78,9 @@ interface Envelope<T> {
 }
 
 const API = '/api/v1';
+
+/** Turnstile token header checked by the backend on register, login and new complaints. */
+const captchaHeader = (token?: string): Record<string, string> => (token ? { 'X-Turnstile-Token': token } : {});
 /** Refresh this long before the access token expires. */
 const REFRESH_MARGIN_MS = 30_000;
 /** Safety cap when collecting every page of a list (100 per page). */
@@ -82,18 +98,21 @@ export class HttpCivicFixApi implements CivicFixApi {
   private accessTokenExpiresAt = 0;
   private refreshInFlight: Promise<AuthUser | null> | null = null;
   private departmentNames = new Map<string, string>();
+  private capturePolicy: Promise<CapturePolicy> | null = null;
+  /** Files already staged by checkMedia, so uploadEvidence doesn't send them twice. */
+  private staged = new WeakMap<File, StagedRef>();
 
   constructor(private readonly options: HttpApiOptions) {}
 
   // ---------------------------------------------------------------- auth
 
-  async login(credentials: LoginCredentials, signal?: AbortSignal): Promise<AuthSession> {
-    const data = await this.data<unknown>('/auth/login', { method: 'POST', body: credentials, signal, auth: false });
+  async login({ captchaToken, ...credentials }: LoginCredentials, signal?: AbortSignal): Promise<AuthSession> {
+    const data = await this.data<unknown>('/auth/login', { method: 'POST', body: credentials, signal, auth: false, headers: captchaHeader(captchaToken) });
     return { user: await this.acceptSession(data) };
   }
 
-  async register(input: RegisterInput, signal?: AbortSignal): Promise<AuthSession> {
-    const data = await this.data<unknown>('/auth/register', { method: 'POST', body: input, signal, auth: false });
+  async register({ captchaToken, ...input }: RegisterInput, signal?: AbortSignal): Promise<AuthSession> {
+    const data = await this.data<unknown>('/auth/register', { method: 'POST', body: input, signal, auth: false, headers: captchaHeader(captchaToken) });
     return { user: await this.acceptSession(data) };
   }
 
@@ -143,7 +162,7 @@ export class HttpCivicFixApi implements CivicFixApi {
         throw new ApiError(`${label}: ${check.message ?? 'This file was not accepted.'}`, 422, 'MEDIA_REJECTED');
       }
     }
-    const created = parseComplaint(await this.data<unknown>('/complaints', { method: 'POST', body, signal }));
+    const created = parseComplaint(await this.data<unknown>('/complaints', { method: 'POST', body, signal, headers: captchaHeader(input.captchaToken) }));
     // Photos are uploaded after the complaint exists. A failed upload never loses the report itself.
     let uploaded = 0;
     for (const photo of input.photos) {
@@ -235,6 +254,20 @@ export class HttpCivicFixApi implements CivicFixApi {
 
   /** Asks the backend whether a photo/video would be accepted (AI-generated or edited files are not). Stores nothing. */
   async checkMedia(file: File, signal?: AbortSignal): Promise<{ allowed: boolean; message: string | null }> {
+    if (await this.usesDirectUpload(signal)) {
+      const ref = await this.stage(file, signal);
+      const result = await this.data<{ allowed?: unknown; message?: unknown }>('/evidence/check-upload', {
+        method: 'POST',
+        body: ref,
+        headers: captureHeaders(file),
+        timeoutMs: UPLOAD_TIMEOUT_MS,
+        signal,
+      });
+      const allowed = result?.allowed !== false;
+      // The server deletes refused files, so only keep accepted ones for the upload that follows.
+      if (allowed) this.staged.set(file, ref);
+      return { allowed, message: typeof result?.message === 'string' ? result.message : null };
+    }
     const data = await this.data<{ allowed?: unknown; message?: unknown }>('/evidence/check', {
       method: 'POST',
       body: file,
@@ -247,6 +280,29 @@ export class HttpCivicFixApi implements CivicFixApi {
   }
 
   async uploadEvidence(publicId: string, file: File, purpose: EvidencePurpose, caption?: string, signal?: AbortSignal): Promise<Evidence> {
+    if (await this.usesDirectUpload(signal)) {
+      const attach = async (ref: StagedRef) =>
+        (
+          await this.data<{ evidence: Evidence }>(`/complaints/${enc(publicId)}/evidence/from-upload`, {
+            method: 'POST',
+            body: { ...ref, purpose, ...(caption ? { caption } : {}) },
+            headers: captureHeaders(file),
+            timeoutMs: UPLOAD_TIMEOUT_MS,
+            signal,
+          })
+        ).evidence;
+      const cached = this.staged.get(file);
+      this.staged.delete(file);
+      if (cached) {
+        try {
+          return await attach(cached);
+        } catch (error) {
+          // The staged copy expired or was removed: upload it again once.
+          if (!(error instanceof ApiError && error.status === 400 && error.code === 'VALIDATION_ERROR')) throw error;
+        }
+      }
+      return attach(await this.stage(file, signal));
+    }
     const data = await this.data<{ evidence: Evidence }>(`/complaints/${enc(publicId)}/evidence`, {
       method: 'POST',
       body: file,
@@ -264,11 +320,62 @@ export class HttpCivicFixApi implements CivicFixApi {
   }
 
   async getCapturePolicy(signal?: AbortSignal): Promise<CapturePolicy> {
-    return this.data<CapturePolicy>('/evidence/capture-policy', { signal });
+    const policy = await this.data<CapturePolicy>('/evidence/capture-policy', { signal });
+    this.capturePolicy = Promise.resolve(policy);
+    return policy;
+  }
+
+  private async usesDirectUpload(signal?: AbortSignal): Promise<boolean> {
+    this.capturePolicy ??= this.data<CapturePolicy>('/evidence/capture-policy', { signal });
+    try {
+      return (await this.capturePolicy).directUpload === true;
+    } catch (error) {
+      this.capturePolicy = null;
+      throw error;
+    }
+  }
+
+  /** Uploads the file straight to storage with a one-off signature from the API. */
+  private async stage(file: File, signal?: AbortSignal): Promise<StagedRef> {
+    const kind = file.type.startsWith('video/') ? 'video' : 'image';
+    const ticket = await this.data<UploadTicket>('/evidence/uploads', { method: 'POST', body: { kind }, signal });
+    if (!ticket.uploadUrl.startsWith('https://api.cloudinary.com/')) throw new ApiError('The upload service returned an invalid response.', 502, 'INVALID_RESPONSE');
+    const form = new FormData();
+    for (const [name, value] of Object.entries(ticket.fields)) form.append(name, value);
+    form.append('file', file);
+    const timeout = AbortSignal.timeout(UPLOAD_TIMEOUT_MS);
+    let response: Response;
+    try {
+      // No cookies or auth header: storage only needs the signed fields.
+      response = await fetch(ticket.uploadUrl, { method: 'POST', body: form, signal: signal ? AbortSignal.any([signal, timeout]) : timeout, credentials: 'omit' });
+    } catch {
+      if (signal?.aborted) throw new ApiError('The upload was cancelled.', 0, 'ABORTED');
+      throw new ApiError('The file could not be uploaded. Check your connection and try again.', 0, 'NETWORK_ERROR');
+    }
+    const result = (await response.json().catch(() => null)) as { format?: unknown } | null;
+    if (!response.ok || typeof result?.format !== 'string') {
+      // Storage refuses formats outside the allowed list with 400; anything else is a failed upload.
+      const refused = response.status === 400;
+      throw new ApiError(
+        refused ? 'This file type is not accepted. Use a JPEG, PNG or WebP photo, or an MP4, MOV or WebM video.' : 'The file could not be uploaded. Please try again.',
+        refused ? 415 : 502,
+        refused ? 'UNSUPPORTED_MEDIA_TYPE' : 'UPLOAD_FAILED',
+      );
+    }
+    return { token: ticket.token, format: result.format };
   }
 
   async startCaptureSession(signal?: AbortSignal): Promise<CaptureSession> {
     return this.data<CaptureSession>('/evidence/capture-sessions', { method: 'POST', signal });
+  }
+
+  async evidenceSource(evidenceId: string, signal?: AbortSignal): Promise<EvidenceSource> {
+    // Large files can't pass through the API on some hosts, so prefer a short-lived signed storage link.
+    const { link } = await this.data<{ link: { url: string } | null }>(`/evidence/${enc(evidenceId)}/link`, { signal });
+    if (link?.url && link.url.startsWith('https://')) return { url: link.url, release: () => undefined };
+    const blob = await this.fetchEvidenceContent(evidenceId, signal);
+    const url = URL.createObjectURL(blob);
+    return { url, release: () => URL.revokeObjectURL(url) };
   }
 
   async fetchEvidenceContent(evidenceId: string, signal?: AbortSignal): Promise<Blob> {
